@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# .NET build output
+bin/
+obj/
+*.user
+plugin/local.props
+
+# Packaging output
+build/
+dist/
+*.spec
+*.zip
+
+# Local logs and test results
+build_result.txt
+package_build.txt
+archive_result.txt
+tests/results/
+
+# Archived old code
+_old/
+_archive_*/

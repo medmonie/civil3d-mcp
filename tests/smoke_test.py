@@ -1,0 +1,174 @@
+"""End-to-end test of the MCP server WITHOUT Civil 3D.
+
+Starts fake_bridge.py, launches server.py over stdio exactly like Claude does, and exercises the single
+`civil3d` tool: reads, QA checks, help, the edit path, the declined-permission path and error handling.
+Also checks that the catalogue matches the plugin sources, that the version numbers agree and that
+docs/ACTIONS.md is current.
+
+    python tests/smoke_test.py
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+ROOT = Path(__file__).resolve().parent.parent
+SERVER = ROOT / "server" / "server.py"
+sys.path.insert(0, str(ROOT / "server"))
+import catalog  # noqa: E402
+
+
+def parse(result):
+    if result.isError:
+        raise AssertionError(result.content[0].text)
+    return json.loads(result.content[0].text)
+
+
+async def run(session, action, params=None):
+    return parse(await session.call_tool("civil3d", {"action": action, "params": params or {}}))
+
+
+async def expect_error(session, action, params, needle):
+    res = await session.call_tool("civil3d", {"action": action, "params": params})
+    assert res.isError, f"{action} should have failed"
+    assert needle.lower() in res.content[0].text.lower(), res.content[0].text
+    return res.content[0].text
+
+
+async def single_tool(bridge_file: Path) -> None:
+    params = StdioServerParameters(command=sys.executable, args=[str(SERVER)],
+                                   env={**os.environ, "C3D_BRIDGE_FILE": str(bridge_file)})
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tools = (await session.list_tools()).tools
+            assert [t.name for t in tools] == ["civil3d"], [t.name for t in tools]
+            desc = tools[0].description
+            for name in list(catalog.READ_ACTIONS) + list(catalog.EDIT_OPS) + list(catalog.LOCAL_ACTIONS):
+                assert name in desc, f"{name} missing from the tool description"
+            print(f"one tool 'civil3d', description {len(desc)} chars, "
+                  f"{len(catalog.READ_ACTIONS)} read actions, {len(catalog.EDIT_OPS)} edit operations")
+
+            info = await run(session, "get_drawing_info")
+            assert info["civil"]["surfaces"] == 2, info
+            pipes = await run(session, "list_pipes", {"network_name": "ss-main"})
+            assert pipes["returned"] == 2, pipes
+            pp = await run(session, "list_pressure_pipes", {"network_name": "pn-test"})
+            assert pp["returned"] == 2, pp
+            sp = await run(session, "alignment_station_to_point", {"alignment_name": "RD-01", "station": 10})
+            assert sp["easting"] == 100.0, sp
+            print("read actions ok")
+
+            layers = await run(session, "check_layer_names", {"pattern": r"[A-Z]-[A-Z]+-[A-Z]+"})
+            assert layers["nonConforming"] == ["layer1"], layers
+            names = await run(session, "check_default_names")
+            assert names["totalFlagged"] == 3, names  # Surface1, Alignment - (2), Pipe Network - (1)
+            print("QA checks ok:", names["defaultNamed"])
+
+            h = await run(session, "help")
+            assert h["plugin"]["missingInPlugin"] == [] and h["plugin"]["undocumentedInCatalogue"] == [], h["plugin"]
+            one = await run(session, "help", {"topic": "pressure_add"})
+            assert "pipes?" in one["pressure_add"]["params"], one
+            print("help ok")
+
+            assert (await run(session, "ping"))["editingAllowed"] is False
+            dry = await run(session, "edit", {"dry_run": True, "operations": [{"op": "layer_create", "name": "C-TEST"}]})
+            assert dry["applied"] is False and dry["dryRun"] is True, dry
+            done = await run(session, "edit", {"operations": [
+                {"op": "pressure_network_create", "name": "W-01", "parts_list": "Water"},
+                {"op": "pressure_add", "network": "W-01",
+                 "pipes": [{"start": [0, 0, 1], "end": [10, 0, 1], "size": 150, "match": "ductile"}]}]})
+            assert done["applied"] is True and done["operations"] == 2, done
+            assert (await run(session, "ping"))["editingAllowed"] is True   # granted once, stays granted
+            print("edit path ok (permission granted once, then reused)")
+
+            await expect_error(session, "edit", {"operations": [{"op": "format_disk"}]}, "unknown edit operation")
+            await expect_error(session, "edit", {}, "non-empty list")
+            await expect_error(session, "layer_create", {"name": "X"}, "is an edit operation")
+            await expect_error(session, "no_such_action", {}, "unknown action")
+            await expect_error(session, "check_layer_names", {"pattern": "("}, "invalid regular expression")
+            print("error paths ok")
+
+
+async def declined(bridge_file: Path) -> None:
+    params = StdioServerParameters(command=sys.executable, args=[str(SERVER)],
+                                   env={**os.environ, "C3D_BRIDGE_FILE": str(bridge_file)})
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            res = await run(session, "edit", {"operations": [{"op": "layer_create", "name": "C-TEST"}]})
+            assert res["applied"] is False and res["permission"] == "not granted", res
+            print("declined permission ok: nothing applied")
+
+
+async def split_tools(bridge_file: Path) -> None:
+    params = StdioServerParameters(command=sys.executable, args=[str(SERVER)],
+                                   env={**os.environ, "C3D_BRIDGE_FILE": str(bridge_file), "C3D_MCP_SPLIT": "1"})
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tools = sorted(t.name for t in (await session.list_tools()).tools)
+            assert tools == ["civil3d_edit", "civil3d_read"], tools
+            res = await session.call_tool("civil3d_read", {"action": "edit", "params": {"operations": [{"op": "layer_create", "name": "X"}]}})
+            assert res.isError, "the read tool must refuse edits"
+            ok = parse(await session.call_tool("civil3d_edit", {"operations": [{"op": "layer_create", "name": "X"}]}))
+            assert ok["applied"] is True, ok
+            print("split mode ok: civil3d_read refuses edits, civil3d_edit applies them")
+
+
+def static_checks() -> None:
+    cs = (ROOT / "plugin" / "BridgeInfo.cs").read_text(encoding="utf-8")
+    version = re.search(r'Version = "([\d.]+)"', cs).group(1)
+    xml = (ROOT / "plugin" / "PackageContents.xml").read_text(encoding="utf-8")
+    assert f'AppVersion="{version}"' in xml, "PackageContents.xml AppVersion differs from BridgeInfo.Version"
+    # every catalogue name must be registered in the plugin sources, and the other way round
+    src = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "plugin").rglob("*.cs") if "obj" not in p.parts and "bin" not in p.parts)
+    reads = set(re.findall(r'Read\("([a-z_0-9]+)"', src))
+    ops = set(re.findall(r'ops\["([a-z_0-9]+)"\]', src))
+    assert reads == set(catalog.READ_ACTIONS), (sorted(reads ^ set(catalog.READ_ACTIONS)))
+    assert ops == set(catalog.EDIT_OPS), (sorted(ops ^ set(catalog.EDIT_OPS)))
+    # the README quotes the version and the number of actions
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    short = ".".join(version.split(".")[:2])
+    for needle in (f"Version {short}", f"{len(catalog.READ_ACTIONS)} read actions", f"{len(catalog.EDIT_OPS)} edit operations"):
+        assert needle in readme, f"README.md does not say '{needle}'"
+    # the generated action reference must be current
+    docs = subprocess.run([sys.executable, str(ROOT / "tools" / "gen_docs.py"), "--check"], capture_output=True, text=True)
+    assert docs.returncode == 0, docs.stderr or docs.stdout
+    print(f"static checks ok: version {version}, catalogue matches the plugin sources, docs/ACTIONS.md is current")
+
+
+def with_fake(coro, **env) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        bridge_file = Path(tmp) / "bridge.json"
+        fake = subprocess.Popen([sys.executable, str(ROOT / "tests" / "fake_bridge.py"), str(bridge_file)],
+                                env={**os.environ, **env}, stdout=subprocess.DEVNULL)
+        try:
+            for _ in range(50):
+                if bridge_file.exists():
+                    break
+                time.sleep(0.1)
+            else:
+                raise SystemExit("fake bridge did not start")
+            asyncio.run(coro(bridge_file))
+        finally:
+            fake.terminate()
+            fake.wait(timeout=5)
+
+
+if __name__ == "__main__":
+    static_checks()
+    with_fake(single_tool)
+    with_fake(declined, FAKE_EDIT="decline")
+    with_fake(split_tools)
+    print("\nALL OK")

@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Optional machine-specific overrides (DLL folders). Copy local.props.example to local.props. -->
+  <Import Project="local.props" Condition="Exists('local.props')" />
+
+  <PropertyGroup>
+    <!-- Civil 3D 2027 only for now (.NET 10). 2025/2026 (.NET 8) compatibility will be added once this works:
+         the plan is TargetFrameworks net8.0-windows;net10.0-windows plus a second <Components> block in
+         PackageContents.xml. The source code already uses only members that exist in both releases. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>C3dMcpBridge</AssemblyName>
+    <RootNamespace>C3dMcpBridge</RootNamespace>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <!-- Autodesk DLLs reference older WPF/WinForms facades; the version-conflict warning is harmless here. -->
+    <NoWarn>$(NoWarn);MSB3277;CA1416</NoWarn>
+
+    <!-- Default DLL folders = a normal 2027 install (AecBaseMgd.dll in ACA\, AeccDbMgd.dll in C3D\).
+         Override in local.props if Civil 3D is installed elsewhere. -->
+    <Acad2027Dir Condition="'$(Acad2027Dir)'==''">C:\Program Files\Autodesk\AutoCAD 2027\</Acad2027Dir>
+    <Aca2027Dir  Condition="'$(Aca2027Dir)'==''">$(Acad2027Dir)ACA\</Aca2027Dir>
+    <C3d2027Dir  Condition="'$(C3d2027Dir)'==''">$(Acad2027Dir)C3D\</C3d2027Dir>
+
+    <BundleDir>$(APPDATA)\Autodesk\ApplicationPlugins\C3dMcpBridge.bundle\</BundleDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Windows Forms is used by Ui.cs only (fully qualified); keep its names out of every other file. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Private=false: never copy Autodesk DLLs next to ours, Civil 3D already has them loaded. -->
+    <Reference Include="AcCoreMgd"><HintPath>$(Acad2027Dir)accoremgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AcDbMgd"><HintPath>$(Acad2027Dir)acdbmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AcMgd"><HintPath>$(Acad2027Dir)acmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AecBaseMgd"><HintPath>$(Aca2027Dir)AecBaseMgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AeccDbMgd"><HintPath>$(C3d2027Dir)AeccDbMgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AeccPressurePipesMgd"><HintPath>$(C3d2027Dir)AeccPressurePipesMgd.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+
+  <Target Name="DeployBundle" AfterTargets="Build" Condition="'$(DeployBundle)'!='false'">
+    <!-- Close Civil 3D before building, otherwise a loaded DLL is locked and the copy fails. -->
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\PackageContents.xml" DestinationFolder="$(BundleDir)" ContinueOnError="true" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BundleDir)Contents\2027\" ContinueOnError="true" />
+    <Message Importance="high" Text="Deployed to $(BundleDir)Contents\2027\" />
+  </Target>
+
+</Project>

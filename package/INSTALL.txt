@@ -1,0 +1,20 @@
+Civil 3D MCP bridge - quick install (Civil 3D 2027)
+
+Needed on this PC: Autodesk Civil 3D 2027 and the Claude desktop app. Nothing else (no Python, no .NET SDK).
+
+1. Close Civil 3D.
+2. Double-click install.bat. It copies the plugin and the server and prints a small configuration block.
+3. In Claude: Settings > Developer > Edit Config. Add the printed block to the file, save, and restart Claude.
+4. Start Civil 3D and open a drawing. If Civil 3D asks whether to load C3dMcpBridge.dll, choose "Always Load".
+5. Type MCPSTATUS in the Civil 3D command line. It should say the bridge is listening.
+6. In Claude, ask: "Ping Civil 3D and tell me which drawing is open."
+
+Permissions
+- Claude shows ONE tool (civil3d). Allow it once.
+- Reading needs nothing more. The first EDIT of a Civil 3D session shows one Yes/No dialog in Civil 3D;
+  after Yes no edit asks again until Civil 3D is closed.
+- MCPALLOW allows editing without the dialog. MCPREVOKE switches editing off again.
+
+Updating: close Civil 3D, run the new install.bat, restart Claude.
+Uninstall: uninstall.bat, then remove the "civil3d" entry from Claude's config.
+Everything else (what Claude can do, examples, troubleshooting): README.md

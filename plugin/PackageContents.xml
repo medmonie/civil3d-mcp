@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage SchemaVersion="1.0"
+                    AutodeskProduct="AutoCAD"
+                    Name="C3dMcpBridge"
+                    Description="Local MCP bridge for Civil 3D (read, and edit after a one-time permission)"
+                    AppVersion="0.9.0"
+                    ProductType="Application"
+                    Author="Local"
+                    ProductCode="{3B8E5A52-7C41-4D0A-9E6F-21A4C7D90B13}"
+                    UpgradeCode="{6F2B3C1A-9D84-4E57-A1C3-5B7E0D2F8A46}">
+  <CompanyDetails Name="Local" />
+
+  <!-- Civil 3D 2027 (R26.0) only, .NET 10. -->
+  <Components Description="Civil 3D 2027 (.NET 10)">
+    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R26.0" SeriesMax="R26.0" />
+    <ComponentEntry AppName="C3dMcpBridge"
+                    ModuleName="./Contents/2027/C3dMcpBridge.dll"
+                    AppDescription="Civil 3D MCP bridge (.NET 10)"
+                    LoadOnAppStartup="true" />
+  </Components>
+</ApplicationPackage>
