@@ -370,6 +370,10 @@ is predictable: `list_pressure_pipes` is in `Read/PressureRead.cs`, `pressure_ad
 The version is set in `plugin/BridgeInfo.cs` and `plugin/PackageContents.xml` (the test keeps them equal).
 History: [CHANGELOG.md](CHANGELOG.md).
 
+## Roadmap
+
+Planned features with effort and priority: [ROADMAP.md](ROADMAP.md).
+
 ## Licence
 
 Copyright (c) 2026 Mohamed Ahmed Hamed.
