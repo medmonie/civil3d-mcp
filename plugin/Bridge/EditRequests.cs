@@ -33,18 +33,42 @@ internal static class EditRequests
             {
                 if (existing.Fingerprint != fingerprint)
                     throw new ArgumentException("This request_id already identifies a different edit. Use its original parameters or submit a new edit with a new ID.");
-                if (existing.Error is string error) throw new InvalidOperationException(error);
-                return existing.Result is JsonElement result ? result : Describe(id, existing);
+                if (existing.State != "error")
+                    return existing.Result is JsonElement result ? result : Describe(id, existing);
+                // An edit that ended in an exception changed nothing: failures inside the batch are returned as
+                // results, and exceptions come from checks before the transaction or from a queue timeout before
+                // the work started. So the same request may run again, e.g. after Civil 3D was busy.
+                existing.State = "pending";
+                existing.Error = null;
+                entry = existing;
             }
-            if (Requests.Count >= MaxRequests)
-                throw new InvalidOperationException("This bridge session reached its edit request limit. Restart Civil 3D to start a new session.");
-            entry = new Entry(target, fingerprint);
-            Requests.Add(id, entry);
+            else
+            {
+                if (Requests.Count >= MaxRequests)
+                    throw new InvalidOperationException("This bridge session reached its edit request limit. Restart Civil 3D to start a new session.");
+                entry = new Entry(target, fingerprint);
+                Requests.Add(id, entry);
+            }
+        }
+
+        object reply;
+        try
+        {
+            reply = await run();
+        }
+        catch (Exception ex)
+        {
+            lock (Gate)
+            {
+                entry.State = "error";   // nothing was applied, so this request_id may be sent again
+                entry.Error = ErrorText(ex);
+            }
+            throw;
         }
 
         try
         {
-            var result = JsonSerializer.SerializeToElement(await run(), Json.Out);
+            var result = JsonSerializer.SerializeToElement(reply, Json.Out);
             bool? applied = result.TryGetProperty("applied", out var value) ? value.GetBoolean() : null;
             int size = Encoding.UTF8.GetByteCount(result.GetRawText());
             lock (Gate)
@@ -68,10 +92,11 @@ internal static class EditRequests
         }
         catch (Exception ex)
         {
+            // The edit ran but its reply could not be recorded: never run it again under this ID.
             lock (Gate)
             {
-                entry.State = "error";
-                entry.Error = ErrorText(ex);
+                entry.State = "completed";
+                entry.Error = "The edit finished but its reply could not be recorded: " + ErrorText(ex);
             }
             throw;
         }

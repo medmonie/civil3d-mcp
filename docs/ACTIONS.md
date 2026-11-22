@@ -94,7 +94,7 @@ Everything goes through one MCP tool: `civil3d(action, params)`. A parameter end
 
 ## The `edit` action
 
-Run a batch of operations on a specific open drawing. First call get_drawing_info and verify the drawing name. Pass its target and new_edit_request_id as target and request_id. Use the target from the reads used to prepare this edit. A changed session or active drawing stops the edit. The drawing operations share one transaction. dry_run aborts that transaction after validation. File outputs run after commit. Editing requires permission for the target drawing. If the response is interrupted, check get_edit_status with the original target and request_id; resend only with the same parameters and request ID for a retry.
+Run a batch of operations on a specific open drawing. First call get_drawing_info and verify the drawing name. Pass its target and new_edit_request_id as target and request_id. Use the target from the reads used to prepare this edit. A changed session or active drawing stops the edit. The drawing operations share one transaction. dry_run aborts that transaction after validation. File outputs run after commit. Editing requires permission for the target drawing. If the response is interrupted, check get_edit_status with the original target and request_id; resend only with the same parameters and request ID for a retry. A request whose state is 'error' changed nothing (for example Civil 3D was busy) and may be resent with the same request ID.
 
 ## Edit operations (69) - items of `operations`
 

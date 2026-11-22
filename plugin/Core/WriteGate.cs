@@ -57,7 +57,7 @@ internal static class WriteGate
         var sw = Stopwatch.StartNew();
         bool yes = Ui.AskYesNo(
             "Allow MCP edits in Civil 3D?",
-            "An MCP client such as ChatGPT is asking to edit this Civil 3D drawing.\n\n" +
+            "An AI assistant (MCP client such as Claude or ChatGPT) is asking to edit this Civil 3D drawing.\n\n" +
             "First request (drawing " + Path.GetFileName(doc.Name) + "):\n" + firstRequestSummary + "\n\n" +
             "Yes  = allow edits in this drawing until it closes or you run MCPREVOKE.\n" +
             "No   = nothing is changed.\n\n" +

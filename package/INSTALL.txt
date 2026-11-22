@@ -1,23 +1,25 @@
 Civil 3D MCP bridge - quick install (Civil 3D 2027)
 
-Needed on this PC: Autodesk Civil 3D 2027 and the ChatGPT desktop app with local MCP access.
+Needed on this PC: Autodesk Civil 3D 2027 and an MCP client (Claude Desktop, ChatGPT desktop or Codex).
 The package includes the MCP server. Python and the .NET SDK are only needed to build it from source.
 
 1. Close Civil 3D.
 2. Double-click install.bat. It installs the Civil 3D plug-in and prints the MCP server's full path.
-3. In ChatGPT desktop, open Settings > MCP servers > Add server. Name it civil3d, choose STDIO, and set the
-   command to the printed server path with no arguments. If civil3d already exists, update its command.
-   Save and restart as prompted. The installer also writes a TOML snippet for Codex configuration.
+3. Connect your MCP client to the printed server path:
+   - Claude Desktop: Settings > Developer > Edit Config, add the block from claude_desktop_config_snippet.json
+     (saved next to the server), then fully quit and restart Claude.
+   - ChatGPT desktop: Settings > MCP servers > Add server. Name it civil3d, choose STDIO, command = the server
+     path, no arguments. If civil3d already exists, update its command. Save and restart as prompted.
+   - Codex: add codex_mcp_config_snippet.toml to ~/.codex/config.toml.
 4. Start Civil 3D and open a drawing. Confirm the publisher/path if Civil 3D asks whether to load the plug-in.
 5. Run MCPSTATUS in the Civil 3D command line. It should say the bridge is listening.
 6. In a local chat with the server enabled, ask "Ping Civil 3D and tell me which drawing is open."
 
 Permissions
-- ChatGPT applies the configured MCP tool approvals. Civil 3D also asks on the first edit of each drawing.
+- Your MCP client applies its own tool approvals. Civil 3D also asks on the first edit of each drawing.
 - A Yes in Civil 3D allows later edits of that drawing until it closes or MCPREVOKE is run.
 - MCPALLOW allows editing without the dialog. MCPREVOKE switches editing off again.
 
 To use ChatGPT in a browser or cloud chat, follow the Secure MCP Tunnel setup in README.md.
 Updating: close Civil 3D and the MCP client, run the new install.bat, then reopen both.
 Uninstall: run uninstall.bat, then remove civil3d from the MCP client's settings.
-Claude Desktop users can use the JSON snippet written by the installer.

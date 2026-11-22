@@ -23,10 +23,13 @@ echo.
 echo Installed. Plugin: %BUNDLE%
 echo Server:  "%C3D_INSTALL_DIR%\c3d-mcp-server.exe"
 echo.
-echo In ChatGPT desktop, open Settings ^> MCP servers ^> Add server.
-echo Name it civil3d, choose STDIO and use the server path above as the command.
-echo If civil3d already exists, update its command instead. Save and restart as prompted.
-echo Config file snippet for Codex: "%C3D_CODEX_SNIP%"
-echo Open a drawing in Civil 3D 2027, then run MCPSTATUS in the Civil 3D command line.
-echo See README.md for the ChatGPT cloud setup and "%SNIP%" for Claude Desktop.
+echo Connect your MCP client to this server (see README.md, Connect your MCP client):
+echo   Claude Desktop: Settings ^> Developer ^> Edit Config, add the block from
+echo                   "%SNIP%"
+echo                   then fully quit and restart Claude.
+echo   ChatGPT desktop: Settings ^> MCP servers ^> Add server, name civil3d, STDIO,
+echo                   command = the server path above. Save and restart as prompted.
+echo   Codex: add "%C3D_CODEX_SNIP%" to ~/.codex/config.toml
+echo.
+echo Then open a drawing in Civil 3D 2027 and run MCPSTATUS in the command line.
 pause

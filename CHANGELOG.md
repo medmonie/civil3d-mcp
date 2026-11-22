@@ -2,8 +2,9 @@
 
 ## 0.10.0
 
+- Works with ChatGPT desktop and Codex as well as Claude: the installer writes a Codex TOML snippet next to the Claude JSON one, and the README covers each client. `--read-only` serves only reads, for ChatGPT in a browser through Secure MCP Tunnel.
 - Bound edits and approval to a specific open drawing. Write calls now require the drawing `target` and a `request_id` UUID from `get_drawing_info`.
-- Added `get_edit_status` and same-request deduplication for interrupted calls. Repeated handles in one edit operation are resolved once per object.
+- Added `get_edit_status` and same-request deduplication for interrupted calls. A request that failed without changing the drawing (for example Civil 3D was busy) can be resent with the same ID. Repeated handles in one edit operation are resolved once per object.
 - Validated SewerGEMS labels, flow paths, metric units, and catalogue sizes before writing. The import verifies pipe connections, bore, and inverts.
 - Created the SewerGEMS network, profile objects, and styles in a shared transaction. Profile placement and band tables use a separately tracked edit with grouped line and text annotations.
 

@@ -1,6 +1,6 @@
-"""The catalogue of everything Claude can ask Civil 3D to do.
+"""The catalogue of everything the AI client can ask Civil 3D to do.
 
-This file is the single place for the WORDING Claude sees (action names, what they do, their parameters).
+This file is the single place for the WORDING the AI client sees (action names, what they do, their parameters).
 The behaviour lives in the plugin; `help` and the tests compare the two so they cannot drift apart silently.
 docs/ACTIONS.md is generated from this file (tools/gen_docs.py).
 
@@ -135,7 +135,8 @@ EDIT_ACTION = (
     "A changed session or active drawing stops the edit. The drawing operations share one transaction. "
     "dry_run aborts that transaction after validation. File outputs run after commit. Editing requires permission for the "
     "target drawing. If the response is interrupted, check get_edit_status with the original target and request_id; "
-    "resend only with the same parameters and request ID for a retry."
+    "resend only with the same parameters and request ID for a retry. A request whose state is 'error' changed nothing "
+    "(for example Civil 3D was busy) and may be resent with the same request ID."
 )
 
 LAYER_PROPS = {"color?": ACI, "on?": "", "frozen?": "", "locked?": "", "plot?": ""}

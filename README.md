@@ -2,21 +2,21 @@
 
 **Version 0.10 · Autodesk Civil 3D 2027 · Windows**
 
-Lets ChatGPT and other MCP clients read the open Civil 3D drawing and edit it after you grant permission in Civil 3D.
+Lets Claude, ChatGPT and other MCP clients read the open Civil 3D drawing and edit it after you grant permission in Civil 3D.
 It covers:
 layers and AutoCAD drafting, surfaces, alignments, profiles, corridors, gravity and pressure pipe networks,
 saving and plotting to PDF.
 
 ```
-ChatGPT desktop / Codex ──stdio──> MCP server (c3d-mcp-server.exe, or python server\server.py)
+Claude / ChatGPT / Codex ─stdio─> MCP server (c3d-mcp-server.exe, or python server\server.py)
                       │  127.0.0.1 only, random port + per-session token
                       v
                   C3dMcpBridge.dll inside Civil 3D ──> Civil 3D .NET API
 ```
 
 The connection between the MCP server and Civil 3D stays on this computer. Tool results are returned to the
-client and can contain drawing names, paths, coordinates, and geometry. ChatGPT cloud access uses an optional
-Secure MCP Tunnel.
+client and can contain drawing names, paths, coordinates, and geometry. ChatGPT in a browser connects through an
+optional Secure MCP Tunnel, read-only.
 
 ## Contents
 
@@ -35,23 +35,41 @@ Secure MCP Tunnel.
 
 ### Option A - installer zip (any PC, recommended)
 
-Needs Civil 3D 2027 and the ChatGPT desktop app with local MCP access. The package includes the MCP server.
+Needs Civil 3D 2027 and an MCP client: Claude Desktop, the ChatGPT desktop app, or Codex. The package includes the
+MCP server; no Python or .NET SDK is needed.
 
 1. Close Civil 3D.
 2. Unzip `C3dMcp-2027.zip` and double-click **`install.bat`**. It copies
    - the plugin to `%APPDATA%\Autodesk\ApplicationPlugins\C3dMcpBridge.bundle` (Civil 3D loads it by itself),
    - the server to `%LOCALAPPDATA%\C3dMcpBridge\c3d-mcp-server.exe`,
-   - and saves `codex_mcp_config_snippet.toml` and `claude_desktop_config_snippet.json` next to the server.
-3. In ChatGPT desktop, open **Settings > MCP servers > Add server**. Name the server `civil3d`, choose **STDIO**,
-   and use the full executable path printed by the installer as the command. Leave arguments empty. If `civil3d`
-   already exists, update its command. Save and select **Restart** when prompted.
+   - and saves `claude_desktop_config_snippet.json` and `codex_mcp_config_snippet.toml` next to the server.
+3. Connect your MCP client (next section).
 4. Start Civil 3D and open a drawing. If Civil 3D asks whether to load `C3dMcpBridge.dll`, verify the path and publisher
-   details before choosing how to load it. Run **`MCPSTATUS`** in the Civil 3D command line.
-5. In a local chat, confirm that `civil3d` is enabled with `/mcp`, then ask *“Ping Civil 3D and tell me which drawing is open.”*
+   details, then choose **Always Load**. Run **`MCPSTATUS`** in the Civil 3D command line.
+5. In a chat, ask *“Ping Civil 3D and tell me which drawing is open.”*
 
-Codex CLI and IDE users can use the TOML snippet in `~/.codex/config.toml`. Update the existing `[mcp_servers.civil3d]`
-table if present. Claude Desktop users can merge the JSON snippet into `claude_desktop_config.json` through
-**Settings > Developer > Edit Config**. See [OpenAI’s MCP setup guide](https://learn.chatgpt.com/docs/extend/mcp).
+### Connect your MCP client
+
+**Claude Desktop.** **Settings > Developer > Edit Config**, then add the block from `claude_desktop_config_snippet.json`
+to `claude_desktop_config.json` (merge it into an existing `mcpServers` section if there is one):
+
+```json
+{
+  "mcpServers": {
+    "civil3d": { "command": "C:\\Users\\<you>\\AppData\\Local\\C3dMcpBridge\\c3d-mcp-server.exe" }
+  }
+}
+```
+
+Fully quit Claude (tray icon > Quit) and start it again. `civil3d` appears under the tools menu of a new chat.
+
+**ChatGPT desktop app.** **Settings > MCP servers > Add server**. Name it `civil3d`, choose **STDIO**, and use the full
+executable path printed by the installer as the command, with no arguments. If `civil3d` already exists, update its
+command. Save and select **Restart** when prompted. In a local chat, `/mcp` shows whether it is enabled.
+See [OpenAI’s MCP setup guide](https://learn.chatgpt.com/docs/extend/mcp).
+
+**Codex CLI / IDE.** Add the table from `codex_mcp_config_snippet.toml` to `~/.codex/config.toml` (update the existing
+`[mcp_servers.civil3d]` table if present). The ChatGPT desktop app and Codex share this configuration.
 
 ### Option B - from this source folder (the development PC)
 
@@ -64,8 +82,13 @@ Needs the .NET 10 SDK and Python 3.10 or newer.
    ```
 2. Close Civil 3D and double-click **`build.bat`**. It builds the plugin and copies it to the Civil 3D plugin folder.
    Open `build_result.txt` and check for `0 Error(s)`.
-3. In **Settings > MCP servers**, configure `civil3d` as **STDIO** with the virtual environment’s `python.exe` as the
-   command and the absolute `server.py` path as its single argument. The equivalent Codex TOML is:
+3. Configure `civil3d` in your client with the virtual environment’s `python.exe` as the command and the absolute
+   `server.py` path as its single argument. Claude Desktop:
+   ```json
+   "civil3d": { "command": "C:\\path\\to\\civil3d-mcp\\server\\.venv\\Scripts\\python.exe",
+                "args": ["C:\\path\\to\\civil3d-mcp\\server\\server.py"] }
+   ```
+   ChatGPT desktop / Codex TOML:
    ```toml
    [mcp_servers.civil3d]
    command = 'C:\path\to\civil3d-mcp\server\.venv\Scripts\python.exe'
@@ -128,7 +151,7 @@ The MCP client and Civil 3D manage approvals independently.
 
 | Where | What you are asked | How often |
 |---|---|---|
-| ChatGPT or other MCP client | Allow the MCP tool call | Depends on client and workspace settings |
+| Claude, ChatGPT or other MCP client | Allow the MCP tool call | Depends on client and workspace settings |
 | Civil 3D | Allow the MCP client to edit the target drawing | Once for each open drawing, at the first edit |
 
 - **Reading never asks anything** in Civil 3D.
@@ -152,7 +175,7 @@ Commands in the Civil 3D command line:
 
 ## 3. How to use it
 
-Open the drawing in Civil 3D, then ask ChatGPT in plain language. ChatGPT chooses the actions.
+Open the drawing in Civil 3D, then ask your AI assistant in plain language. It chooses the actions.
 
 **Typical requests**
 
@@ -171,8 +194,8 @@ Open the drawing in Civil 3D, then ask ChatGPT in plain language. ChatGPT choose
 **Good habits**
 
 - **Name things.** Civil 3D objects are addressed by name (surface, alignment, network). Plain entities and network
-  parts are addressed by their *handle*, which ChatGPT gets from the read actions.
-- **Select, then ask.** ChatGPT can read the current selection in Civil 3D.
+  parts are addressed by their *handle*, which the assistant gets from the read actions.
+- **Select, then ask.** The assistant can read the current selection in Civil 3D.
 - **Ask for a dry run** before a large edit: *"do a dry run first"*. Everything is executed and rolled back, so you see
   what would happen and any error, with no change to the drawing.
 - **Confirm the drawing before editing.** `get_drawing_info` returns a `target` and a `new_edit_request_id`.
@@ -182,7 +205,7 @@ Open the drawing in Civil 3D, then ask ChatGPT in plain language. ChatGPT choose
 - **Units** are the drawing's units. Coordinates are easting, northing, elevation. Pressure pipe diameters are read in
   metres; gravity part sizes in the units of the parts list (mm in metric lists).
 - **Parts** come from the drawing's parts lists. A pressure part is chosen by `size` (the number in its description,
-  e.g. 150) and `match` (words in it, e.g. "ductile"); a gravity part by `family` and `inner_diameter`. If ChatGPT says
+  e.g. 150) and `match` (words in it, e.g. "ductile"); a gravity part by `family` and `inner_diameter`. If the assistant says
   several parts match, give one more word.
 
 **What a tool call looks like**
@@ -243,7 +266,7 @@ single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTI
 
 ### Import from Bentley SewerGEMS
 
-Ask ChatGPT, for example: *"Check the SewerGEMS export in `C:\...\sewer network\Full output from sewergems.xlsx` with the
+Ask the assistant, for example: *"Check the SewerGEMS export in `C:\...\sewer network\Full output from sewergems.xlsx` with the
 rename table `Output Of Lisp.csv`, then build it."*
 
 | Step | Action | What happens |

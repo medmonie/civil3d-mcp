@@ -1,6 +1,6 @@
 # Roadmap
 
-This file has two parts: what the Civil 3D MCP does today (v0.9.0), and what could be added next, with an effort estimate and a priority for each item.
+This file has two parts: what the Civil 3D MCP does today (v0.10.0), and what could be added next, with an effort estimate and a priority for each item.
 
 **Effort** (one developer, including the live test in Civil 3D):
 
@@ -21,9 +21,9 @@ This file has two parts: what the Civil 3D MCP does today (v0.9.0), and what cou
 
 ---
 
-## 1. What it does today (v0.9.0)
+## 1. What it does today (v0.10.0)
 
-40 read actions and 68 edit operations, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. Editing needs `MCPALLOW` in Civil 3D. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
+41 read actions and 69 edit operations, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. A dry run executes and rolls back. Each edit names the drawing it is for and carries a request ID, so it cannot land in the wrong drawing or run twice. Editing needs permission per drawing (`MCPALLOW` or the dialog). Works with Claude, ChatGPT desktop and Codex; ChatGPT in a browser connects read-only. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
 
 | Area | Read | Create / edit |
 |---|---|---|
@@ -60,7 +60,7 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 | 5 | **Civil 3D 2025 / 2026 support** | M–L | One build per version, each against that version's API references and .NET runtime. Most offices run more than one version. |
 | 6 | **Band table refresh** | S | Redraw the LISP-style band table for one line after the network or ground changes, without re-importing. |
 | 7 | **Crossing and clearance check** | M | Find where gravity and pressure pipes cross, report the vertical clearance at each crossing and flag those below a set minimum. |
-| 8 | **Dry run for edits** | S | Validate a batch and report what it would change, then roll back. Lets you review large edits before committing them. |
+| 8 | **SewerGEMS model vs drawing check** | M | After an import, compare the drawing's network (names, inverts, sizes, lengths) with the export and list differences, so later edits in Civil 3D can be checked against the model. |
 
 ### P2 — useful
 
