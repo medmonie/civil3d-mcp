@@ -42,7 +42,8 @@
     <_Found Condition="'$(Acad2024Dir)'!='' And Exists('$(C3d2024Dir)AeccDbMgd.dll') And Exists('$(C3d2024Dir)AeccPressurePipesMgd.dll')">net48</_Found>
     <_Found Condition="'$(Acad2025Dir)'!='' And Exists('$(C3d2025Dir)AeccDbMgd.dll') And Exists('$(C3d2025Dir)AeccPressurePipesMgd.dll')">$(_Found);net8.0-windows</_Found>
     <_Found Condition="'$(Acad2027Dir)'!='' And Exists('$(C3d2027Dir)AeccDbMgd.dll') And Exists('$(C3d2027Dir)AeccPressurePipesMgd.dll')">$(_Found);net10.0-windows</_Found>
-    <C3dTargets Condition="'$(C3dTargets)'==''">$(_Found.Trim(';'))</C3dTargets>
+    <!-- Unescape: a property function's result keeps ';' escaped, which would make the list one framework name. -->
+    <C3dTargets Condition="'$(C3dTargets)'==''">$([MSBuild]::Unescape($(_Found.Trim(';'))))</C3dTargets>
     <!-- Nothing found: still try 2027 so the error names the missing DLLs. -->
     <C3dTargets Condition="'$(C3dTargets)'==''">net10.0-windows</C3dTargets>
     <TargetFrameworks>$(C3dTargets)</TargetFrameworks>
