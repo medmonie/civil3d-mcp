@@ -238,13 +238,21 @@ internal static class PressureOps
             var net = (CivilDb.PressurePipeNetwork)c.Tr.GetObject(part.NetworkId, OpenMode.ForRead);
             string type = part is CivilDb.PressurePipe ? PipeType : part.PartType.ToString();
             var size = new PressureParts.Picker(PartsList(c, net, p)).Pick(type, p, handle);
-            part.SwapPartSize(size);
+            SwapSize(part, size);
             changed.Add("size -> " + PressureParts.Describe(size));
         }
         if (StrParam(p, "description") is string d) { part.Description = d; changed.Add("description"); }
         if (changed.Count == 0) throw new ArgumentException("pressure_part_set: give start/end, location, size/match and/or description.");
         return new { handle, name = part.Name, type = part.PartType.ToString(), changed };
     }
+
+#if NETFRAMEWORK
+    // The Civil 3D 2024 .NET API has no way to change the size of an existing pressure part.
+    private static void SwapSize(CivilDb.PressurePart part, CivilStyles.PressurePartSize size) =>
+        throw new NotSupportedException($"pressure_part_set: changing size is not available in Civil 3D 2024 ({PressureParts.Describe(size)} was requested). Delete the part and create it again with the new size, or swap it in Civil 3D.");
+#else
+    private static void SwapSize(CivilDb.PressurePart part, CivilStyles.PressurePartSize size) => part.SwapPartSize(size);
+#endif
 
     // ---------------------------------------------------------------- labels
 

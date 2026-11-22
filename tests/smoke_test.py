@@ -175,6 +175,11 @@ def static_checks() -> None:
     version = re.search(r'Version = "([\d.]+)"', cs).group(1)
     xml = (ROOT / "plugin" / "PackageContents.xml").read_text(encoding="utf-8")
     assert f'AppVersion="{version}"' in xml, "PackageContents.xml AppVersion differs from BridgeInfo.Version"
+    # one bundle component per supported release, each matching a build target in the csproj
+    proj = (ROOT / "plugin" / "C3dMcpBridge.csproj").read_text(encoding="utf-8")
+    for release, tfm in (("2024", "net48"), ("2025", "net8.0-windows"), ("2027", "net10.0-windows")):
+        assert f"./Contents/{release}/C3dMcpBridge.dll" in xml, f"PackageContents.xml has no Civil 3D {release} component"
+        assert f"'$(TargetFramework)'=='{tfm}'" in proj and f"<C3dRelease>{release}</C3dRelease>" in proj, f"csproj does not build {release} as {tfm}"
     # every catalogue name must be registered in the plugin sources, and the other way round
     src = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "plugin").rglob("*.cs") if "obj" not in p.parts and "bin" not in p.parts)
     reads = set(re.findall(r'Read\("([a-z_0-9]+)"', src))

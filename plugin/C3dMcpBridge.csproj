@@ -1,13 +1,52 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Optional machine-specific overrides (DLL folders). Copy local.props.example to local.props. -->
+  <!-- Optional machine-specific overrides (DLL folders, which releases to build). See local.props.example. -->
   <Import Project="local.props" Condition="Exists('local.props')" />
 
+  <!--
+    One DLL per Civil 3D release, each compiled against that release's API and .NET runtime:
+        Civil 3D 2024 (R24.3) -> net48            -> Contents\2024\  (+ System.Text.Json and its dependencies)
+        Civil 3D 2025 (R25.0) -> net8.0-windows   -> Contents\2025\
+        Civil 3D 2027 (R26.0) -> net10.0-windows  -> Contents\2027\
+    A release is built when its Autodesk DLLs are found, in this order:
+        1. AcadYYYYDir from local.props (or -p:AcadYYYYDir=...)
+        2. a normal install: C:\Program Files\Autodesk\AutoCAD YYYY\  (ACA\AecBaseMgd.dll, C3D\AeccDbMgd.dll ...)
+        3. reference copies:  <repo>\refs\YYYY\  (all six DLLs in one folder; git-ignored, see refs\README.md)
+    A release with any DLL missing is skipped (build_package.bat reports it), so it never breaks the other builds.
+    Force a set with -p:C3dTargets="net48;net8.0-windows" (or C3dTargets in local.props).
+  -->
   <PropertyGroup>
-    <!-- Civil 3D 2027 only for now (.NET 10). 2025/2026 (.NET 8) compatibility will be added once this works:
-         the plan is TargetFrameworks net8.0-windows;net10.0-windows plus a second <Components> block in
-         PackageContents.xml. The source code already uses only members that exist in both releases. -->
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <_Refs>$(MSBuildProjectDirectory)\..\refs\</_Refs>
+
+    <Acad2024Dir Condition="'$(Acad2024Dir)'=='' And Exists('C:\Program Files\Autodesk\AutoCAD 2024\C3D\AeccDbMgd.dll')">C:\Program Files\Autodesk\AutoCAD 2024\</Acad2024Dir>
+    <Acad2025Dir Condition="'$(Acad2025Dir)'=='' And Exists('C:\Program Files\Autodesk\AutoCAD 2025\C3D\AeccDbMgd.dll')">C:\Program Files\Autodesk\AutoCAD 2025\</Acad2025Dir>
+    <Acad2027Dir Condition="'$(Acad2027Dir)'=='' And Exists('C:\Program Files\Autodesk\AutoCAD 2027\C3D\AeccDbMgd.dll')">C:\Program Files\Autodesk\AutoCAD 2027\</Acad2027Dir>
+    <!-- Installed layout: ACA\ and C3D\ sub-folders. -->
+    <Aca2024Dir Condition="'$(Aca2024Dir)'=='' And '$(Acad2024Dir)'!=''">$(Acad2024Dir)ACA\</Aca2024Dir>
+    <C3d2024Dir Condition="'$(C3d2024Dir)'=='' And '$(Acad2024Dir)'!=''">$(Acad2024Dir)C3D\</C3d2024Dir>
+    <Aca2025Dir Condition="'$(Aca2025Dir)'=='' And '$(Acad2025Dir)'!=''">$(Acad2025Dir)ACA\</Aca2025Dir>
+    <C3d2025Dir Condition="'$(C3d2025Dir)'=='' And '$(Acad2025Dir)'!=''">$(Acad2025Dir)C3D\</C3d2025Dir>
+    <Aca2027Dir Condition="'$(Aca2027Dir)'=='' And '$(Acad2027Dir)'!=''">$(Acad2027Dir)ACA\</Aca2027Dir>
+    <C3d2027Dir Condition="'$(C3d2027Dir)'=='' And '$(Acad2027Dir)'!=''">$(Acad2027Dir)C3D\</C3d2027Dir>
+    <!-- Reference-copy layout: one flat folder. -->
+    <Acad2024Dir Condition="'$(Acad2024Dir)'=='' And Exists('$(_Refs)2024\AeccDbMgd.dll') And Exists('$(_Refs)2024\AeccPressurePipesMgd.dll')">$(_Refs)2024\</Acad2024Dir>
+    <Aca2024Dir  Condition="'$(Aca2024Dir)'==''">$(Acad2024Dir)</Aca2024Dir>
+    <C3d2024Dir  Condition="'$(C3d2024Dir)'==''">$(Acad2024Dir)</C3d2024Dir>
+    <Acad2025Dir Condition="'$(Acad2025Dir)'=='' And Exists('$(_Refs)2025\AeccDbMgd.dll') And Exists('$(_Refs)2025\AeccPressurePipesMgd.dll')">$(_Refs)2025\</Acad2025Dir>
+    <Aca2025Dir  Condition="'$(Aca2025Dir)'==''">$(Acad2025Dir)</Aca2025Dir>
+    <C3d2025Dir  Condition="'$(C3d2025Dir)'==''">$(Acad2025Dir)</C3d2025Dir>
+    <Acad2027Dir Condition="'$(Acad2027Dir)'=='' And Exists('$(_Refs)2027\AeccDbMgd.dll') And Exists('$(_Refs)2027\AeccPressurePipesMgd.dll')">$(_Refs)2027\</Acad2027Dir>
+    <Aca2027Dir  Condition="'$(Aca2027Dir)'==''">$(Acad2027Dir)</Aca2027Dir>
+    <C3d2027Dir  Condition="'$(C3d2027Dir)'==''">$(Acad2027Dir)</C3d2027Dir>
+
+    <_Found Condition="'$(Acad2024Dir)'!='' And Exists('$(C3d2024Dir)AeccDbMgd.dll') And Exists('$(C3d2024Dir)AeccPressurePipesMgd.dll')">net48</_Found>
+    <_Found Condition="'$(Acad2025Dir)'!='' And Exists('$(C3d2025Dir)AeccDbMgd.dll') And Exists('$(C3d2025Dir)AeccPressurePipesMgd.dll')">$(_Found);net8.0-windows</_Found>
+    <_Found Condition="'$(Acad2027Dir)'!='' And Exists('$(C3d2027Dir)AeccDbMgd.dll') And Exists('$(C3d2027Dir)AeccPressurePipesMgd.dll')">$(_Found);net10.0-windows</_Found>
+    <C3dTargets Condition="'$(C3dTargets)'==''">$(_Found.Trim(';'))</C3dTargets>
+    <!-- Nothing found: still try 2027 so the error names the missing DLLs. -->
+    <C3dTargets Condition="'$(C3dTargets)'==''">net10.0-windows</C3dTargets>
+    <TargetFrameworks>$(C3dTargets)</TargetFrameworks>
+
     <PlatformTarget>x64</PlatformTarget>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -17,16 +56,29 @@
     <UseWindowsForms>true</UseWindowsForms>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <!-- Autodesk DLLs reference older WPF/WinForms facades; the version-conflict warning is harmless here. -->
-    <NoWarn>$(NoWarn);MSB3277;CA1416</NoWarn>
-
-    <!-- Default DLL folders = a normal 2027 install (AecBaseMgd.dll in ACA\, AeccDbMgd.dll in C3D\).
-         Override in local.props if Civil 3D is installed elsewhere. -->
-    <Acad2027Dir Condition="'$(Acad2027Dir)'==''">C:\Program Files\Autodesk\AutoCAD 2027\</Acad2027Dir>
-    <Aca2027Dir  Condition="'$(Aca2027Dir)'==''">$(Acad2027Dir)ACA\</Aca2027Dir>
-    <C3d2027Dir  Condition="'$(C3d2027Dir)'==''">$(Acad2027Dir)C3D\</C3d2027Dir>
+    <!-- Autodesk DLLs reference older WPF/WinForms facades; the version-conflict warnings are harmless here. -->
+    <NoWarn>$(NoWarn);MSB3277;MSB3270;CA1416</NoWarn>
 
     <BundleDir>$(APPDATA)\Autodesk\ApplicationPlugins\C3dMcpBridge.bundle\</BundleDir>
+  </PropertyGroup>
+
+  <!-- Per-release DLL folders, bundle sub-folder and compile symbol (C3D2024 / C3D2025 / C3D2027). -->
+  <PropertyGroup Condition="'$(TargetFramework)'=='net48'">
+    <C3dRelease>2024</C3dRelease>
+    <AcadDir>$(Acad2024Dir)</AcadDir><AcaDir>$(Aca2024Dir)</AcaDir><C3dDir>$(C3d2024Dir)</C3dDir>
+    <!-- .NET Framework: System.Text.Json and its dependencies ship next to our DLL (see AssemblyResolver.cs). -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)'=='net8.0-windows'">
+    <C3dRelease>2025</C3dRelease>
+    <AcadDir>$(Acad2025Dir)</AcadDir><AcaDir>$(Aca2025Dir)</AcaDir><C3dDir>$(C3d2025Dir)</C3dDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)'=='net10.0-windows'">
+    <C3dRelease>2027</C3dRelease>
+    <AcadDir>$(Acad2027Dir)</AcadDir><AcaDir>$(Aca2027Dir)</AcaDir><C3dDir>$(C3d2027Dir)</C3dDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(C3dRelease)'!=''">
+    <DefineConstants>$(DefineConstants);C3D$(C3dRelease)</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -35,21 +87,30 @@
     <Using Remove="System.Drawing" />
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- Private=false: never copy Autodesk DLLs next to ours, Civil 3D already has them loaded. -->
-    <Reference Include="AcCoreMgd"><HintPath>$(Acad2027Dir)accoremgd.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="AcDbMgd"><HintPath>$(Acad2027Dir)acdbmgd.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="AcMgd"><HintPath>$(Acad2027Dir)acmgd.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="AecBaseMgd"><HintPath>$(Aca2027Dir)AecBaseMgd.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="AeccDbMgd"><HintPath>$(C3d2027Dir)AeccDbMgd.dll</HintPath><Private>false</Private></Reference>
-    <Reference Include="AeccPressurePipesMgd"><HintPath>$(C3d2027Dir)AeccPressurePipesMgd.dll</HintPath><Private>false</Private></Reference>
+  <ItemGroup Condition="'$(TargetFramework)'=='net48'">
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <!-- Compiler-only attributes (init, required, records, Index/Range, nullable) for .NET Framework. -->
+    <PackageReference Include="PolySharp" Version="1.15.0" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers" />
   </ItemGroup>
 
-  <Target Name="DeployBundle" AfterTargets="Build" Condition="'$(DeployBundle)'!='false'">
-    <!-- Close Civil 3D before building, otherwise a loaded DLL is locked and the copy fails. -->
+  <ItemGroup Condition="'$(TargetFramework)'!=''">
+    <!-- Private=false: never copy Autodesk DLLs next to ours, Civil 3D already has them loaded. -->
+    <Reference Include="AcCoreMgd"><HintPath>$(AcadDir)accoremgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AcDbMgd"><HintPath>$(AcadDir)acdbmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AcMgd"><HintPath>$(AcadDir)acmgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AecBaseMgd"><HintPath>$(AcaDir)AecBaseMgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AeccDbMgd"><HintPath>$(C3dDir)AeccDbMgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AeccPressurePipesMgd"><HintPath>$(C3dDir)AeccPressurePipesMgd.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+
+  <!-- Runs once per release (inner build). Close Civil 3D before building, otherwise a loaded DLL is locked. -->
+  <Target Name="DeployBundle" AfterTargets="Build" Condition="'$(DeployBundle)'!='false' And '$(TargetFramework)'!=''">
+    <ItemGroup>
+      <_BundleFiles Include="$(TargetDir)*.dll" />
+    </ItemGroup>
     <Copy SourceFiles="$(MSBuildProjectDirectory)\PackageContents.xml" DestinationFolder="$(BundleDir)" ContinueOnError="true" />
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(BundleDir)Contents\2027\" ContinueOnError="true" />
-    <Message Importance="high" Text="Deployed to $(BundleDir)Contents\2027\" />
+    <Copy SourceFiles="@(_BundleFiles)" DestinationFolder="$(BundleDir)Contents\$(C3dRelease)\" ContinueOnError="true" />
+    <Message Importance="high" Text="Civil 3D $(C3dRelease): deployed to $(BundleDir)Contents\$(C3dRelease)\ (DLLs from $(AcadDir))" />
   </Target>
 
 </Project>

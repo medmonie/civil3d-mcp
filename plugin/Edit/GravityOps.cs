@@ -161,7 +161,7 @@ internal static class GravityOps
                         throw new ArgumentException($"{what}: '{key}' must name one structure in the network. Found '{name}' {matches?.Count ?? 0} time(s).");
                     var structure = matches[0];
                     pipe.ConnectToStructure(position, structure, true);
-                    var connected = position == CivilDb.ConnectorPositionType.Start ? pipe.StartObjectId : pipe.EndObjectId;
+                    var connected = position == CivilDb.ConnectorPositionType.Start ? pipe.StartStructureId : pipe.EndStructureId;
                     if (connected != structure) throw new InvalidOperationException($"{what}: no connection to '{name}' was recorded.");
                     made++;
                     continue;

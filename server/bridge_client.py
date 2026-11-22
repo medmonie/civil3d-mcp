@@ -73,7 +73,7 @@ def call(method: str, params: dict[str, Any] | None = None, timeout: float = REA
         port, token = int(info["port"]), str(info["token"])
     except FileNotFoundError:
         raise BridgeError(
-            "Civil 3D is not reachable. Start Civil 3D 2027 with the C3dMcpBridge plugin "
+            "Civil 3D is not reachable. Start Civil 3D (2024, 2025 or 2027) with the C3dMcpBridge plugin "
             "(type MCPSTATUS in Civil 3D to confirm it is loaded), then try again."
         ) from None
     except (OSError, ValueError, KeyError, TypeError) as exc:

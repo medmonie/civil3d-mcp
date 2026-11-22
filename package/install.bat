@@ -31,5 +31,5 @@ echo   ChatGPT desktop: Settings ^> MCP servers ^> Add server, name civil3d, STD
 echo                   command = the server path above. Save and restart as prompted.
 echo   Codex: add "%C3D_CODEX_SNIP%" to ~/.codex/config.toml
 echo.
-echo Then open a drawing in Civil 3D 2027 and run MCPSTATUS in the command line.
+echo Then open a drawing in Civil 3D 2024, 2025 or 2027 and run MCPSTATUS in the command line.
 pause

@@ -1,6 +1,6 @@
 # Civil 3D MCP bridge
 
-**Version 0.11 · Autodesk Civil 3D 2027 · Windows**
+**Version 0.12 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
 
 Lets Claude, ChatGPT and other MCP clients read the open Civil 3D drawing and edit it after you grant permission in Civil 3D.
 It covers:
@@ -35,11 +35,12 @@ optional Secure MCP Tunnel, read-only.
 
 ### Option A - installer zip (any PC, recommended)
 
-Needs Civil 3D 2027 and an MCP client: Claude Desktop, the ChatGPT desktop app, or Codex. The package includes the
-MCP server; no Python or .NET SDK is needed.
+Needs Civil 3D 2024, 2025 or 2027 and an MCP client: Claude Desktop, the ChatGPT desktop app, or Codex. The package includes the
+MCP server; no Python or .NET SDK is needed. One zip serves all three releases: the bundle holds a plugin DLL per
+release and Civil 3D loads the one that matches it.
 
 1. Close Civil 3D.
-2. Unzip `C3dMcp-2027.zip` and double-click **`install.bat`**. It copies
+2. Unzip `C3dMcp.zip` and double-click **`install.bat`**. It copies
    - the plugin to `%APPDATA%\Autodesk\ApplicationPlugins\C3dMcpBridge.bundle` (Civil 3D loads it by itself),
    - the server to `%LOCALAPPDATA%\C3dMcpBridge\c3d-mcp-server.exe`,
    - and saves `claude_desktop_config_snippet.json` and `codex_mcp_config_snippet.toml` next to the server.
@@ -73,15 +74,15 @@ See [OpenAI’s MCP setup guide](https://learn.chatgpt.com/docs/extend/mcp).
 
 ### Option B - from this source folder (the development PC)
 
-Needs the .NET 10 SDK and Python 3.10 or newer.
+Needs the .NET 10 SDK (it also builds the .NET 8 and .NET Framework 4.8 plugins; their targeting packs are
+downloaded on the first build) and Python 3.10 or newer.
 
-1. One time, create the Python environment:
-   ```
-   python -m venv server\.venv
-   server\.venv\Scripts\pip install -r server\requirements.txt
-   ```
-2. Close Civil 3D and double-click **`build.bat`**. It builds the plugin and copies it to the Civil 3D plugin folder.
-   Open `build_result.txt` and check for `0 Error(s)`.
+1. One time, double-click **`setup_server.bat`**. It creates `server\.venv` for this PC, installs the requirements
+   and runs the offline smoke test; `setup_result.txt` should end with `ALL OK` and `RESULT=DONE`.
+   (A `.venv` copied from another PC never works: it points to that PC's Python. The script moves it aside.)
+2. Close Civil 3D and double-click **`build.bat`**. It builds the plugin for each Civil 3D release it finds and copies
+   it to the Civil 3D plugin folder. Open `build_result.txt` and check for `0 Error(s)` and one
+   `Civil 3D 20xx: deployed` line per release (see [Building for 2024, 2025 and 2027](#building-for-2024-2025-and-2027)).
 3. Configure `civil3d` in your client with the virtual environment’s `python.exe` as the command and the absolute
    `server.py` path as its single argument. Claude Desktop:
    ```json
@@ -96,7 +97,8 @@ Needs the .NET 10 SDK and Python 3.10 or newer.
    ```
 4. Restart the MCP client and continue with steps 4 and 5 of option A.
 
-`build_package.bat` produces the installer zip of option A in `dist\`.
+`build_package.bat` produces, in `dist\`, the installer zip of option A (`C3dMcp.zip`) and a clean source zip
+(`C3dMcp-source.zip`) for building on another PC.
 
 ### ChatGPT in a browser or cloud chat
 
@@ -365,7 +367,8 @@ use metres. The node elevation is taken as ground level.
 | Corridor targets (daylight to a surface, offset alignments), several regions | Not built yet | Set targets in Civil 3D after the corridor is created |
 | Section-view sheets and bands, plan production | Not built yet | Views are placed in a grid with default styles |
 | Create object styles, band styles, parts lists from scratch | Band contents are not exposed by the API; the others are not built yet | Use the styles of your template by name. Label styles can be created (`label_style_create`), and catalogue families can be added to a parts list |
-| Civil 3D 2025 / 2026 | The plugin is built for 2027 (.NET 10) only | - |
+| Civil 3D 2026 or older than 2024 | Built for 2024, 2025 and 2027 only (2026 is not tested) | - |
+| Change the size of an existing pressure part (`pressure_part_set` with `size`) in Civil 3D 2024 | The 2024 API has no swap-size method | Delete the part and add it again with the new size |
 | Run AutoCAD commands or scripts | Left out on purpose (no arbitrary code execution) | - |
 
 Also good to know:
@@ -425,7 +428,8 @@ Where to look: `build_result.txt` (build), `tests\results\` (tests), `%LOCALAPPD
 ### Folder layout
 
 ```
-plugin/                     the Civil 3D plugin (C#, .NET 10)
+plugin/                     the Civil 3D plugin (C#; net48 for 2024, net8.0-windows for 2025, net10.0-windows for 2027)
+  Compat.cs, AssemblyResolver.cs   .NET Framework 4.8 shims (Civil 3D 2024), compiled for net48 only
   Plugin.cs                 entry point, commands MCPSTATUS / MCPALLOW / MCPREVOKE
   Bridge/                   socket server, marshalling onto Civil 3D's main thread
   Core/                     Registry (the table of actions), J (parameter reading), Db (drawing helpers),
@@ -442,7 +446,9 @@ server/                     the MCP server (Python)
   qa.py                     QA checks computed from read actions
 tests/                      smoke_test.py (no Civil 3D), live_read.py, live_edit.py, fake_bridge.py, *.bat launchers
 tools/                      gen_docs.py (docs/ACTIONS.md), typecheck/ (compile without deploying), apitool/ (API signatures)
-package/, build_package.bat the installer zip
+package/, build_package.bat the installer zip and the source zip
+refs/YYYY/                  (git-ignored) Civil 3D reference DLLs for building a release not installed here
+plugin/prebuilt/YYYY/       (git-ignored) last DLLs built per release, used by build_package.bat as a fallback
 docs/ACTIONS.md             generated action reference
 ```
 
@@ -470,10 +476,32 @@ is predictable: `list_pressure_pipes` is in `Read/PressureRead.cs`, `pressure_ad
 | Offline test of the server | `tests\run_smoke_test.bat` | `tests\results\smoke_test.txt` |
 | All read actions, live | `tests\run_live_read.bat` | `tests\results\live_read.txt` |
 | All edit operations, live | `tests\run_live_edit.bat` | `tests\results\live_edit.txt`, ends with `ALL PASS` |
-| Installer zip | `build_package.bat` | `dist\C3dMcp-2027.zip`, log `package_build.txt` |
+| Python environment + offline test | `setup_server.bat` | `setup_result.txt` |
+| Installer and source zips | `build_package.bat` | `dist\C3dMcp.zip`, `dist\C3dMcp-source.zip`, log `package_build.txt` (one `RELEASE 20xx:` line each) |
 
 > **Note.** `live_edit.py` draws test objects. It refuses to run unless the active drawing is a new unsaved
 > `DrawingN.dwg` or its name contains `mcp_test`. Run `MCPALLOW` first, or answer the dialog once.
+
+### Building for 2024, 2025 and 2027
+
+One source tree, three DLLs. Each is compiled against its own release's API and .NET runtime:
+
+| Civil 3D | Series | Target | Bundle folder | Notes |
+|---|---|---|---|---|
+| 2024 | R24.3 | `net48` (.NET Framework 4.8) | `Contents\2024` | ships System.Text.Json and its dependencies; `Compat.cs` supplies missing .NET members |
+| 2025 | R25.0 | `net8.0-windows` | `Contents\2025` | |
+| 2027 | R26.0 | `net10.0-windows` | `Contents\2027` | |
+
+A release is built when its DLLs are found: `AcadYYYYDir` in `plugin\local.props`, else a normal install in
+`C:\Program Files\Autodesk\AutoCAD YYYY\`, else reference copies in `refs\YYYY\` (six DLLs; see
+[refs/README.md](refs/README.md)). With the 2024 and 2025 DLLs copied into `refs\`, one PC builds all three and
+`build_package.bat` reports `RESULT=OK`; otherwise it uses `plugin\prebuilt\YYYY\` for a missing release, or reports
+`RESULT=OK_PARTIAL missing: ...`. Release-specific code uses `#if NETFRAMEWORK` (2024) or the symbols `C3D2024`,
+`C3D2025`, `C3D2027`.
+
+**Release routine.** Build and run the live tests on 2027 (`build.bat`, `tests\run_live_edit.bat`); build the package;
+install `C3dMcp.zip` on the 2024 and 2025 PCs and run `MCPSTATUS` plus the live tests there (they need the source zip
+and `setup_server.bat`).
 
 The version is set in `plugin/BridgeInfo.cs` and `plugin/PackageContents.xml` (the test keeps them equal).
 History: [CHANGELOG.md](CHANGELOG.md).

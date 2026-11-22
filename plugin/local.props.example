@@ -1,7 +1,11 @@
 <Project>
-  <!-- Copy to local.props (same folder) only if Civil 3D 2027 is NOT installed in the default location.
-       Each value is a folder ending in a backslash. -->
+  <!-- Copy to local.props (same folder) only if a Civil 3D release is NOT installed in the default location (and not
+       in refs\YYYY\), or to choose which releases to build. Each folder value ends in a backslash. -->
   <PropertyGroup>
+    <!-- <Acad2024Dir>D:\Autodesk\AutoCAD 2024\</Acad2024Dir> -->
+    <!-- <Acad2025Dir>D:\Autodesk\AutoCAD 2025\</Acad2025Dir> -->
     <!-- <Acad2027Dir>D:\Autodesk\AutoCAD 2027\</Acad2027Dir> -->
+    <!-- Default: every release whose DLLs are found. net48 = 2024, net8.0-windows = 2025, net10.0-windows = 2027. -->
+    <!-- <C3dTargets>net10.0-windows</C3dTargets> -->
   </PropertyGroup>
 </Project>

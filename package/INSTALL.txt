@@ -1,6 +1,6 @@
-Civil 3D MCP bridge - quick install (Civil 3D 2027)
+Civil 3D MCP bridge - quick install (Civil 3D 2024 / 2025 / 2027)
 
-Needed on this PC: Autodesk Civil 3D 2027 and an MCP client (Claude Desktop, ChatGPT desktop or Codex).
+Needed on this PC: Autodesk Civil 3D 2024, 2025 or 2027 and an MCP client (Claude Desktop, ChatGPT desktop or Codex).
 The package includes the MCP server. Python and the .NET SDK are only needed to build it from source.
 
 1. Close Civil 3D.

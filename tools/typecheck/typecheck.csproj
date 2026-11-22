@@ -2,7 +2,9 @@
   <!-- Compiles the plugin sources against the Civil 3D DLLs WITHOUT Windows Forms and without deploying anything.
        Purpose: catch every API mismatch (wrong member, wrong signature) in seconds, on any OS, and later check the
        same sources against another release's DLLs:
-           dotnet build tools/typecheck -p:AcadDir="C:\Program Files\Autodesk\AutoCAD 2026\\"
+           Civil 3D 2025 (.NET 8):
+               dotnet build tools/typecheck -p:TargetFramework=net8.0 -p:AcadDir="C:\Program Files\Autodesk\AutoCAD 2025\\"
+           Civil 3D 2024 is checked by the real build (net48 needs the System.Text.Json / PolySharp packages).
        The real build is plugin/C3dMcpBridge.csproj. -->
   <PropertyGroup>
     <TargetFramework Condition="'$(TargetFramework)'==''">net10.0</TargetFramework>

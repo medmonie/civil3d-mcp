@@ -57,7 +57,7 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 | 2 | **Trench and excavation quantities** | M | Excavation, bedding, backfill and surplus volumes per pipe from invert, ground surface, trench width and side slope. Reported by depth band (0–2, 2–4, 4–6 m…) for the BOQ. |
 | 3 | **Sewer design checks report** | M | Minimum/maximum slope, minimum cover, maximum depth, velocity limits from the SewerGEMS results, pipe size never decreasing downstream, drop manholes. Rules set by parameters, e.g. the Egyptian code values. |
 | 4 | ~~WaterGEMS import~~ | done | Done in 0.11.0. Next: exact PVC parts once the parts list has them, hydrant branches, reducers and crosses. |
-| 5 | **Civil 3D 2025 / 2026 support** | M–L | One build per version, each against that version's API references and .NET runtime. Most offices run more than one version. |
+| 5 | ~~**Civil 3D 2024 / 2025 support**~~ ✅ 0.12 | M–L | Done: one DLL per release (2024, 2025, 2027). 2026 still to build and test (.NET 8, same as 2025). |
 | 6 | **Band table refresh** | S | Redraw the LISP-style band table for one line after the network or ground changes, without re-importing. |
 | 7 | **Crossing and clearance check** | M | Find where gravity and pressure pipes cross, report the vertical clearance at each crossing and flag those below a set minimum. |
 | 8 | **SewerGEMS model vs drawing check** | M | After an import, compare the drawing's network (names, inverts, sizes, lengths) with the export and list differences, so later edits in Civil 3D can be checked against the model. |
@@ -96,7 +96,7 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 
 1. **Quantities:** #1 BOQ, #2 trench quantities, #3 design checks. All three reuse the network data the MCP already reads, so they pay back fastest.
 2. **Water side:** #4 WaterGEMS import, #7 crossings.
-3. **Reach:** #5 Civil 3D 2025/2026.
+3. **Reach:** #5 Civil 3D 2026 (2024 / 2025 done in 0.12).
 4. Small items (#6, #8, #15, #18) can be added in between.
 
 Effort figures are estimates. Anything marked XL depends on what Autodesk adds to the API.

@@ -25,3 +25,10 @@ tests/results/
 # Archived old code
 _old/
 _archive_*/
+
+# Autodesk reference DLLs (see refs/README.md) and per-release DLLs kept by build_package.bat
+refs/*
+!refs/README.md
+plugin/prebuilt/
+setup_result.txt
+plot.log
