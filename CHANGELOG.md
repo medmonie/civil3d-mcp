@@ -5,7 +5,7 @@
 - Civil 3D 2024 and 2025 support next to 2027, from one source tree. Each release gets its own DLL, compiled against its API and runtime: 2024 → .NET Framework 4.8 (`Contents\2024`, with System.Text.Json; `Compat.cs` and `AssemblyResolver.cs` bridge the missing .NET members), 2025 → .NET 8 (`Contents\2025`), 2027 → .NET 10 (`Contents\2027`). `PackageContents.xml` has one component per release, so one bundle and one installer (`dist\C3dMcp.zip`) serve all three.
 - `build.bat` / `build_package.bat` build every release whose DLLs are found: installed, set in `plugin\local.props`, or copied into `refs\YYYY\` (git-ignored). `build_package.bat` falls back to `plugin\prebuilt\YYYY\`, logs one `RELEASE` line per release, and also writes `dist\C3dMcp-source.zip`. New `setup_server.bat` creates the Python environment and runs the smoke test.
 - Gravity pipe connections read `StartStructureId` / `EndStructureId` (present in all three releases). In Civil 3D 2024, `pressure_part_set` with a new size is refused with a clear message (no swap-size method in that API).
-- Built and live-tested on the 2024 and 2025 PCs (from their copies of 0.11); 2027 live-tested here.
+- Status: 2027 built and live-tested (WaterGEMS import, ALL PASS). The 2025 port passed the full live edit and read tests on its PC; the 2024 port built with 0 errors there. The merged 0.12 DLLs for 2024 and 2025 still need their live test.
 
 ## 0.11.0
 
