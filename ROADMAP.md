@@ -1,6 +1,6 @@
 # Roadmap
 
-This file has two parts: what the Civil 3D MCP does today (v0.10.0), and what could be added next, with an effort estimate and a priority for each item.
+This file has two parts: what the Civil 3D MCP does today (v0.11.0), and what could be added next, with an effort estimate and a priority for each item.
 
 **Effort** (one developer, including the live test in Civil 3D):
 
@@ -21,7 +21,7 @@ This file has two parts: what the Civil 3D MCP does today (v0.10.0), and what co
 
 ---
 
-## 1. What it does today (v0.10.0)
+## 1. What it does today (v0.11.0)
 
 41 read actions and 69 edit operations, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. A dry run executes and rolls back. Each edit names the drawing it is for and carries a request ID, so it cannot land in the wrong drawing or run twice. Editing needs permission per drawing (`MCPALLOW` or the dialog). Works with Claude, ChatGPT desktop and Codex; ChatGPT in a browser connects read-only. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
 
@@ -56,7 +56,7 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 | 1 | **Bill of quantities export** (.xlsx) | M | Pipe length by diameter and material, manholes by depth band, fittings and valves by type, from any gravity or pressure network. The most-asked deliverable after the drawing itself. |
 | 2 | **Trench and excavation quantities** | M | Excavation, bedding, backfill and surplus volumes per pipe from invert, ground surface, trench width and side slope. Reported by depth band (0–2, 2–4, 4–6 m…) for the BOQ. |
 | 3 | **Sewer design checks report** | M | Minimum/maximum slope, minimum cover, maximum depth, velocity limits from the SewerGEMS results, pipe size never decreasing downstream, drop manholes. Rules set by parameters, e.g. the Egyptian code values. |
-| 4 | **WaterGEMS import** (pressure networks) | M | Same workflow as SewerGEMS, for water lines: pipes, junctions, valves and hydrants as a pressure network, with profile views. |
+| 4 | ~~WaterGEMS import~~ | done | Done in 0.11.0. Next: exact PVC parts once the parts list has them, hydrant branches, reducers and crosses. |
 | 5 | **Civil 3D 2025 / 2026 support** | M–L | One build per version, each against that version's API references and .NET runtime. Most offices run more than one version. |
 | 6 | **Band table refresh** | S | Redraw the LISP-style band table for one line after the network or ground changes, without re-importing. |
 | 7 | **Crossing and clearance check** | M | Find where gravity and pressure pipes cross, report the vertical clearance at each crossing and flag those below a set minimum. |

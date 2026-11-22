@@ -80,7 +80,8 @@ READ_GROUPS: dict[str, Group] = {
         "list_pressure_part_sizes": ("Without parts_list: the pressure parts lists (name, handle, pipe size count). "
                                      "With it: the part descriptions for part_type, to choose 'size' and 'match' values.",
                                      {"parts_list?": "name or handle", "part_type?": "Pipe (default), Fitting, Appurtenance, Elbow, Tee, Reducer, Valve, ...",
-                                      "contains?": "text filter, e.g. '150'", "limit?": "default 100"}),
+                                      "contains?": "text filter, e.g. '150'", "catalog?": "true: list what the list's catalogue offers (add them to the list in Civil 3D's parts list dialog)",
+                                      "limit?": "default 100"}),
     },
     "Styles and meta": {
         "list_styles": ("Style names of one kind (for the 'style' / 'label_set' parameters of edit operations). Without a style name an "
@@ -104,6 +105,19 @@ SEWERGEMS_INPUT = {
     "line_prefix?": "default 'LINE' (lines are LINE1, LINE1-3, ...)",
 }
 
+WATERGEMS_INPUT = {
+    "path": "full path of the WaterGEMS full-output workbook (.xlsx with sheets Pipe, Junction, PRV, ...)",
+    "target?": "from get_drawing_info (default: the active drawing)",
+    "parts_list?": "pressure parts list, default 'Water'; its pipes, tees, bends and gate valves are used",
+    "cover?": "m to the top of pipe below the WaterGEMS node elevation (taken as ground), default 1.0",
+    "sizes?": "override the drawn size per WaterGEMS bore, e.g. {\"99.4\": 110}; default: PVC/PE bore -> next outside diameter, others -> DN",
+    "valve_layer?": "CAD layer of valve chambers (closed polylines or blocks) -> gate valves on the model pipe beneath",
+    "service_layers?": "CAD layers of service connections (polylines; size read from the layer name, e.g. WATER-63) -> teed-off pipes",
+    "hydrant_layer?": "CAD layer of hydrant blocks (reported; kept as blocks)", "cad_pipe_layers?": "CAD layers of the drawn pipes -> difference report",
+    "main_min_mm?": "pipes of at least this drawn size get profile views, default 160", "line_prefix?": "default 'WL'",
+    "min_line_length?": "m, default 50", "valve_tolerance?": "m, default 3", "tap_tolerance?": "m, default 1.5",
+}
+
 # computed in the MCP server from read actions; they never reach the plugin under these names
 LOCAL_ACTIONS: Group = {
     "help": ("This catalogue with every parameter. Pass topic to narrow it.", {"topic?": "an action or edit operation name"}),
@@ -125,7 +139,19 @@ LOCAL_ACTIONS: Group = {
                            "pipe_label_style, pipe_label_text, label_height_mm, alignment_label_set, profile_view_style, band_table",
                            "profile_view_style?": "overrides the presentation setting", "dry_run?": "validate the core network, profiles, and styles transaction",
                            "finish_attempt?": "default 1. Increment only after the preceding finishing transaction is confirmed rolled back."}),
+    "watergems_check": ("Read a Bentley WaterGEMS export (and the drawing's CAD layers, when given) without drawing: pipes by "
+                        "material and size, the catalogue parts that will stand in, CAD valves/services/hydrants matched to the "
+                        "model, the profile lines of the mains, and where model and drawing differ.", WATERGEMS_INPUT),
+    "watergems_import": ("Build a WaterGEMS export in the open drawing as a pressure network: pipes at 'cover' below ground, "
+                         "PRVs, tees and bends at the nodes, gate valves and service taps from CAD layers, plan labels with the real "
+                         "material and size, then an alignment, ground profile and profile view per main. Needs edit permission.",
+                         {**WATERGEMS_INPUT, "target": "from get_drawing_info", "request_id": "one UUID for the import",
+                          "network?": "default 'Water'", "profile_views_at?": "[x,y], default 50 below the network",
+                          "profile_view_gap?": "default 30", "profile_view_style?": "default 'Profile View'",
+                          "dry_run?": "validate the network transaction only"}),
 }
+
+IMPORT_ACTIONS = {"sewergems_import", "watergems_import"}
 
 # --------------------------------------------------------------------------- edit operations (inside action 'edit')
 
@@ -309,9 +335,10 @@ EDIT_GROUPS: dict[str, Group] = {
                          "chosen from the parts list by 'size' (a whole number in its description, e.g. 150) and 'match' (words "
                          "in it, e.g. 'ductile'); exactly one part must match. Fittings/appurtenances connect to pipe ends at the "
                          "same point. z is the pipe centreline elevation.",
-                         {"network": "", "pipes?": "[{id?, start:[x,y,z], end:[x,y,z], size, match?, through?: [x,y] makes a curved pipe through that point}, ...]",
-                          "fittings?": "[{id?, at:[x,y,z], type?: Elbow|Tee|Reducer|Cross|Cap|..., size, match?}, ...]",
-                          "appurtenances?": "[{id?, at:[x,y,z], type?: Valve|Hydrant|..., size, match?}, ...]",
+                         {"network": "", "pipes?": "[{id?, name?, description?, start:[x,y,z], end:[x,y,z], size, match? (or part: exact description), "
+                                                    "through?: [x,y] makes a curved pipe through that point}, ...]",
+                          "fittings?": "[{id?, name?, description?, at:[x,y,z], type?: Elbow|Tee|Reducer|Cross|Cap|..., size, match? (or part)}, ...]",
+                          "appurtenances?": "[{id?, name?, description?, at:[x,y,z], type?: Valve|Hydrant|..., size, match? (or part)}, ...]",
                           "parts_list?": "default: the network's", "connect_tolerance?": "default 0.01"}),
         "pressure_pipe_run": ("Create a pipe run along a 2D path at a depth of cover below the network's reference surface, with "
                               "bends added automatically (the way the Civil 3D pipe-run command works).",
@@ -322,6 +349,7 @@ EDIT_GROUPS: dict[str, Group] = {
                                "size?": "new size", "match?": "", "description?": ""}),
         "pressure_labels_add": ("Add plan labels to the pipes, fittings and appurtenances of a pressure network.",
                                 {"pressure_network": "", "pipes?": "default true", "fittings?": "default true", "appurtenances?": "default true",
+                                 "handles?": "label only these parts (default: every part of the chosen kinds)",
                                  "pipe_style?": "see list_styles kind pressure_pipe_label", "fitting_style?": "", "appurtenance_style?": ""}),
     },
 }
@@ -364,7 +392,7 @@ def tool_description(mode: str = "all") -> str:
                    "parameter description.")
         out.append("\nREAD ACTIONS")
         out += _signatures(READ_GROUPS)
-        local = LOCAL_ACTIONS if mode == "all" else {k: v for k, v in LOCAL_ACTIONS.items() if k != "sewergems_import"}
+        local = LOCAL_ACTIONS if mode == "all" else {k: v for k, v in LOCAL_ACTIONS.items() if k not in IMPORT_ACTIONS}
         out += _signatures({"QA / help": local})
     if mode in ("all", "edit"):
         out.append("\nEDIT ACTION\n- edit(operations, target, request_id, dry_run?): " + EDIT_ACTION)
@@ -380,7 +408,7 @@ def help_data(topic: str | None = None, *, include_edits: bool = True) -> dict:
     def full(entries: Group) -> dict:
         return {name: {"summary": summary, "params": params} for name, (summary, params) in entries.items()}
 
-    local = LOCAL_ACTIONS if include_edits else {k: v for k, v in LOCAL_ACTIONS.items() if k != "sewergems_import"}
+    local = LOCAL_ACTIONS if include_edits else {k: v for k, v in LOCAL_ACTIONS.items() if k not in IMPORT_ACTIONS}
     entries = ((READ_ACTIONS, "action"), (local, "action"))
     edit = {"summary": EDIT_ACTION, "params": EDIT_PARAMS}
     if topic is None:

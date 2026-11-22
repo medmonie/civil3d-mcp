@@ -19,6 +19,7 @@ from mcp.types import ToolAnnotations
 import catalog
 import qa
 import sewergems
+import watergems
 from bridge_client import EDIT_TIMEOUT, BridgeError, DrawingTarget, call
 
 def _help(params: dict[str, Any], *, include_edits: bool) -> dict[str, Any]:
@@ -65,6 +66,10 @@ def _dispatch(action: str, params: dict[str, Any] | None, allow_read: bool, allo
         if not allow_edit:
             raise ValueError("SewerGEMS import requires the combined write-enabled civil3d tool.")
         return sewergems.build(params)
+    if name == "watergems_import":
+        if not allow_edit:
+            raise ValueError("WaterGEMS import requires the combined write-enabled civil3d tool.")
+        return watergems.build(params)
 
     if not allow_read:
         raise ValueError("This tool only edits (action='edit'). Use the civil3d_read tool for everything else.")
@@ -78,6 +83,8 @@ def _dispatch(action: str, params: dict[str, Any] | None, allow_read: bool, allo
         return qa.check_default_names()
     if name == "sewergems_check":
         return sewergems.check(params)
+    if name == "watergems_check":
+        return watergems.check(params)
     if name in catalog.READ_ACTIONS:
         return call(name, params)
     if name in catalog.EDIT_OPS:

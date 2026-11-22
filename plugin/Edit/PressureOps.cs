@@ -100,9 +100,14 @@ internal static class PressureOps
             }
             else
             {
-                id = net.AddLinePipe(new LineSegment3d(a, b), part);
+                try { id = net.AddLinePipe(new LineSegment3d(a, b), part); }
+                catch (Exception ex)
+                {
+                    throw new ArgumentException($"{what} ({a.DistanceTo(b):0.###} m, {PressureParts.Describe(part)}): {ex.Message}");
+                }
                 totalLength += a.DistanceTo(b);
             }
+            Describe(c, id, s, what);
             created.Add(new { kind = "pipe", id = StrParam(s, "id"), handle = H(id), part = PressureParts.Describe(part) });
         }
 
@@ -127,7 +132,10 @@ internal static class PressureOps
                 string type = StrParam(s, "type") ?? defaultType;
                 if (SameName(type, PipeType) || SameName(type, "PressurePipe")) throw new ArgumentException($"{what}: type cannot be a pipe.");
                 var part = picker.Pick(type, s, $"{what} ({type})");
-                var id = addToNetwork(at, part);
+                ObjectId id;
+                try { id = addToNetwork(at, part); }
+                catch (Exception ex) { throw new ArgumentException($"{what} ({PressureParts.Describe(part)}): {ex.Message}"); }
+                Describe(c, id, s, what);
 
                 // Connect the new part's ports, in order, to the pipe ends that meet at its location.
                 int made = 0;
@@ -151,6 +159,19 @@ internal static class PressureOps
             network = net.Name, pipes = pipeSpecs.Count, fittings = fittingSpecs.Count, appurtenances = appurtenanceSpecs.Count,
             connections, totalPipeLength = R3(totalLength), created,
         };
+    }
+
+    /// <summary>Optional 'name' and 'description' of a part just added.</summary>
+    private static void Describe(EditContext c, ObjectId id, JsonElement s, string what)
+    {
+        if (StrParam(s, "name") is null && StrParam(s, "description") is null) return;
+        var part = (CivilDb.PressurePart)c.Tr.GetObject(id, OpenMode.ForWrite);
+        if (StrParam(s, "name") is { Length: > 0 } name)
+        {
+            try { part.Name = name; }
+            catch (Exception ex) { c.Warn($"{what}: name '{name}' was not accepted ({ex.Message}); kept '{part.Name}'."); }
+        }
+        if (StrParam(s, "description") is string d) part.Description = d;
     }
 
     // ---------------------------------------------------------------- pipe run from a path
@@ -232,6 +253,7 @@ internal static class PressureOps
         const double middle = 0.5;   // label position along the part
         var net = FindPressureNetwork(c.Civ, c.Tr, NeedStr(p, "pressure_network"));
         var used = new Dictionary<string, object?>();
+        HashSet<string>? only = Has(p, "handles") ? StrList(p, "handles", 20000).ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
 
         // Labels every part of one kind with one style; returns how many were labelled.
         int Label(string kind, ObjectIdCollection parts, CivilStyles.StyleCollectionBase styles, Action<ObjectId, ObjectId> create)
@@ -239,8 +261,14 @@ internal static class PressureOps
             if (!(BoolParam(p, kind + "s") ?? true)) return 0;
             var style = Styles.Id(styles, StrParam(p, kind + "_style"), $"pressure {kind} label style");
             used[kind] = Styles.NameOf(c.Tr, style);
-            foreach (ObjectId id in parts) create(id, style);
-            return parts.Count;
+            int made = 0;
+            foreach (ObjectId id in parts)
+            {
+                if (only != null && !only.Contains(H(id))) continue;
+                create(id, style);
+                made++;
+            }
+            return made;
         }
 
         int pipes = Label("pipe", net.GetPipeIds(), Styles.PressurePipeLabels(c.Civ),

@@ -1,6 +1,6 @@
 # Civil 3D MCP bridge
 
-**Version 0.10 · Autodesk Civil 3D 2027 · Windows**
+**Version 0.11 · Autodesk Civil 3D 2027 · Windows**
 
 Lets Claude, ChatGPT and other MCP clients read the open Civil 3D drawing and edit it after you grant permission in Civil 3D.
 It covers:
@@ -102,7 +102,7 @@ Needs the .NET 10 SDK and Python 3.10 or newer.
 
 Use [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) to run the stdio server on
 the same Windows PC as Civil 3D. The tunnel makes an outbound connection to OpenAI and returns tool results to ChatGPT.
-This setup starts the server with `--read-only`, which exposes `civil3d_read` and rejects drawing edits and SewerGEMS imports.
+This setup starts the server with `--read-only`, which exposes `civil3d_read` and rejects drawing edits and SewerGEMS / WaterGEMS imports.
 
 1. In [OpenAI Platform tunnel settings](https://platform.openai.com/settings/organization/tunnels), create a tunnel
    associated with your ChatGPT workspace. Obtain a runtime key with tunnel access and download the
@@ -230,7 +230,7 @@ Open the drawing in Civil 3D, then ask your AI assistant in plain language. It c
 
 ## 4. Features
 
-One tool, `civil3d(action, params)`: 41 read actions, 5 QA / help / import actions, and 69 edit operations inside the
+One tool, `civil3d(action, params)`: 41 read actions, 7 QA / help / import actions, and 69 edit operations inside the
 single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTIONS.md)** and by `action="help"`.
 
 ### Read (never changes the drawing)
@@ -316,6 +316,45 @@ while keeping the original import request ID and inputs.
 > the rim of a shallower one. The importer therefore uses a flat-topped manhole (`Cylindrical Junction Structure NF SI`,
 > 1200 mm) and adds it to the parts list if missing. Any manhole whose levels Civil 3D still changed is listed in the
 > reply (`levelMismatches`). Laterals and property connections are not imported.
+
+### Import from Bentley WaterGEMS
+
+Ask the assistant, for example: *"Check the WaterGEMS export `C:\...\water network\Output from water model.xlsx` against
+this drawing (valves on layer Gate-Valve, services on WATER-63 and WATER-25mm, hydrants on FIRE FITTING, drawn pipes on
+the WE. P. DI layers), then build it."*
+
+| Step | Action | What happens |
+|---|---|---|
+| 1 | `watergems_check` | Reads the export and the named CAD layers. Reports pipe lengths by material and size, the parts that will stand in, the valves, service taps and hydrants found in the CAD, the profile lines of the mains, fittings that cannot be placed, and where the model and the drawing differ (pipe routes more than 1 m apart, nodes away from the drawn pipes). Nothing is drawn. |
+| 2 | `watergems_import` | Builds it in the open drawing identified by `target`, with a unique `request_id`. |
+
+**Input.** The WaterGEMS *full output* workbook (`.xlsx`, sheets `Pipe` and `Junction`, plus `PRV` and others when
+present). Rows repeat per time step; the first row of each element is used. Metres and millimetres; the drawing must
+use metres. The node elevation is taken as ground level.
+
+**What is built.**
+
+- **A pressure network** named `Water`. Every pipe keeps its WaterGEMS label; a pipe cut by a valve or a service tap
+  becomes `P-438.1`, `P-438.2`, ... Pipes are laid with `cover` (default 1.0 m) to the top of pipe, at the largest
+  pipe's depth where several meet.
+- **Fittings at the nodes:** a tee where three pipes meet, a bend where the route turns by a catalogue angle (11.25,
+  22.5, 45, 90 degrees), a valve for each PRV (described `PRV 3.5 BAR (PRV-62)`).
+- **From the CAD:** a gate valve wherever a valve chamber sits on a model pipe (`valve_layer`), a tee and service pipe
+  for each service connection (`service_layers`, size read from the layer name). Hydrants (`hydrant_layer`) are
+  listed and kept as the drawn blocks.
+- **Plan labels** with the real material and size, one per WaterGEMS pipe (`PVC Ø110 L=59m`), and a label per valve.
+- **Profiles of the mains** (pipes of at least `main_min_mm`, default 160): an alignment (layer `WATER-ALIGNMENT`,
+  turned off), a ground profile through the node elevations, and a profile view with the pipes, fittings and valves,
+  stacked below the plan (`profile_views_at` moves them).
+
+> **Note. Stand-in parts.** Civil 3D places pressure parts from its parts list. When the list has no part of the real
+> material and size - the metric list of the standard template holds ductile iron 150-400 mm only - the nearest listed
+> size stands in, and the description and label keep the real size. Parts added to a list from the catalogue through
+> the API could not be placed in Civil 3D 2027, so the import uses what the list already holds. To get exact parts, add
+> PVC sizes to the parts list (or a catalogue that has them) in Civil 3D and run the import again on a fresh copy.
+
+> **Note.** No reducers or crosses are placed (the standard list has none). Nodes that would need one, and bends that
+> match no catalogue angle, are listed under `fittingsSkipped`; the pipes still meet there.
 
 ## 5. What it cannot do
 

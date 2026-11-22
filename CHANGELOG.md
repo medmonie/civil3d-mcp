@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.0
+
+- Import from Bentley WaterGEMS: `watergems_check` (export + drawing, nothing drawn) and `watergems_import` (pressure network with WaterGEMS names at a set cover, tees, bends and PRVs at the nodes, gate valves and service taps from CAD layers, plan labels with the real material and size, and an alignment, ground profile and profile view per main). A difference report compares the model with the drawn pipes.
+- Pressure parts: `pressure_add` takes `name`, `description` and `part` (the exact part description) for pipes, fittings and appurtenances, and names the failing part in its errors. `pressure_labels_add` takes `handles` to label only some parts. `list_pressure_part_sizes` with `catalog: true` lists what the parts list's catalogue offers, and shows each listed part's style.
+
 ## 0.10.0
 
 - Works with ChatGPT desktop and Codex as well as Claude: the installer writes a Codex TOML snippet next to the Claude JSON one, and the README covers each client. `--read-only` serves only reads, for ChatGPT in a browser through Secure MCP Tunnel.

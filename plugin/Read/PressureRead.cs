@@ -128,6 +128,7 @@ internal static class PressureRead
         string type = StrParam(p, "part_type") ?? "Pipe";
         string? contains = StrParam(p, "contains");
         int limit = IntParam(p, "limit", 100, 1, 1000);
+        bool catalog = BoolParam(p, "catalog") ?? false;
         return WithRead<object>((db, tr) =>
         {
             if (listName == null)
@@ -142,12 +143,14 @@ internal static class PressureRead
                     }).ToList(),
                     hint = "pass parts_list (name or handle) to see its sizes",
                 };
-            var sizes = PressureParts.Candidates(PressureParts.FindList(db, tr, listName), type)
-                .Select(s => new { description = PressureParts.Describe(s), partType = s.PartType.ToString() })
+            var list = PressureParts.FindList(db, tr, listName);
+            var sizes = (catalog ? PressureParts.CatalogCandidates(list, type) : PressureParts.Candidates(list, type))
+                .Select(s => new { description = PressureParts.Describe(s), partType = s.PartType.ToString(), style = catalog ? null : Safe(() => s.StyleId.IsNull ? "(none)" : H(s.StyleId)) })
                 .Where(r => contains == null || r.description.Contains(contains, StringComparison.OrdinalIgnoreCase));
             var reply = Paged("sizes", sizes, limit, s => s);
             reply["partsList"] = listName;
             reply["type"] = type;
+            reply["source"] = catalog ? "catalogue (add to the parts list in Civil 3D to use them)" : "parts list";
             return reply;
         });
     }

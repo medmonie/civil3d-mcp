@@ -14,7 +14,7 @@ copy /y plugin\bin\Release\net10.0-windows\C3dMcpBridge.dll dist\C3dMcp\bundle\C
 
 echo [2/3] server exe >> "%LOG%"
 server\.venv\Scripts\python -m pip install -r server\requirements.txt pyinstaller >> "%LOG%" 2>&1 || goto fail
-server\.venv\Scripts\python -m PyInstaller --onefile --noconfirm --name c3d-mcp-server --collect-all mcp --paths server --hidden-import catalog --hidden-import qa --hidden-import bridge_client --hidden-import sewergems --collect-submodules openpyxl --distpath dist\C3dMcp --workpath dist\_work --specpath dist\_work server\server.py >> "%LOG%" 2>&1 || goto fail
+server\.venv\Scripts\python -m PyInstaller --onefile --noconfirm --name c3d-mcp-server --collect-all mcp --paths server --hidden-import catalog --hidden-import qa --hidden-import bridge_client --hidden-import sewergems --hidden-import watergems --collect-submodules openpyxl --distpath dist\C3dMcp --workpath dist\_work --specpath dist\_work server\server.py >> "%LOG%" 2>&1 || goto fail
 
 echo [3/3] package >> "%LOG%"
 copy /y package\install.bat dist\C3dMcp\ >> "%LOG%" 2>&1

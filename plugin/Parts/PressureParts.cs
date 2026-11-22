@@ -43,6 +43,28 @@ internal static class PressureParts
         throw new ArgumentException($"Unknown part type '{type}'. Use Pipe, Fitting, Appurtenance or one of: {string.Join(", ", Enum.GetNames<CivilDb.PressurePartType>())}.");
     }
 
+    /// <summary>
+    /// The parts of the catalogue behind a parts list (what can be added to it). PressurePartList.Catalog is not in
+    /// every Civil 3D reference set, so it is reached by reflection.
+    /// </summary>
+    public static List<CivilStyles.PressurePartSize> CatalogCandidates(CivilStyles.PressurePartList pl, string type)
+    {
+        object catalog = pl.GetType().GetProperty("Catalog")?.GetValue(pl)
+            ?? throw new InvalidOperationException("This Civil 3D version does not expose the pressure part catalogue.");
+        object arg;
+        if (Enum.TryParse<CivilDb.PressurePartDomainType>(type, true, out var domain) && !int.TryParse(type, out _)) arg = domain;
+        else if (Enum.TryParse<CivilDb.PressurePartType>(type, true, out var pt) && !int.TryParse(type, out _)) arg = pt;
+        else throw new ArgumentException($"Unknown part type '{type}'. Use Pipe, Fitting, Appurtenance or one of: {string.Join(", ", Enum.GetNames<CivilDb.PressurePartType>())}.");
+        var method = catalog.GetType().GetMethod("GetParts", new[] { arg.GetType() })
+            ?? throw new InvalidOperationException("The pressure part catalogue has no GetParts method in this Civil 3D version.");
+        return (List<CivilStyles.PressurePartSize>)method.Invoke(catalog, new[] { arg })!;
+    }
+
+    public static string Guid(CivilStyles.PressurePartSize s)
+    {
+        try { return s.PartSizeGuid ?? ""; } catch { return ""; }
+    }
+
     /// <summary>Exactly one part whose description contains the size as a whole number and every word of 'match'.</summary>
     public static CivilStyles.PressurePartSize Resolve(IReadOnlyList<CivilStyles.PressurePartSize> candidates, string size, string match, string what)
     {
@@ -58,6 +80,11 @@ internal static class PressureParts
             : $"{what}: {hits.Count} parts match size='{size}' match='{match}'; refine 'match'. First: {string.Join(" | ", hits.Take(8).Select(Describe))}");
     }
 
+    /// <summary>The part whose description is exactly 'description' (case and surrounding spaces ignored).</summary>
+    public static CivilStyles.PressurePartSize Exact(IReadOnlyList<CivilStyles.PressurePartSize> candidates, string description, string what) =>
+        candidates.FirstOrDefault(s => string.Equals(Describe(s).Trim(), description.Trim(), StringComparison.OrdinalIgnoreCase))
+        ?? throw new ArgumentException($"{what}: no part is described exactly '{description}' ({candidates.Count} parts checked). Use list_pressure_part_sizes.");
+
     /// <summary>
     /// Chooses parts for one batch operation. A network is usually built from a handful of distinct parts, so the
     /// candidates of each part type are read once and each distinct request (type + size + match) is resolved once.
@@ -67,14 +94,14 @@ internal static class PressureParts
         private readonly Dictionary<string, List<CivilStyles.PressurePartSize>> _candidates = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, CivilStyles.PressurePartSize> _chosen = new(StringComparer.OrdinalIgnoreCase);
 
-        /// <summary>spec supplies 'size' and 'match'.</summary>
+        /// <summary>spec supplies 'size' and 'match', or 'part' (the exact part description).</summary>
         public CivilStyles.PressurePartSize Pick(string type, JsonElement spec, string what)
         {
-            string size = SizeParam(spec, "size"), match = StrParam(spec, "match") ?? "";
-            string key = $"{type}|{size}|{match}";
+            string size = SizeParam(spec, "size"), match = StrParam(spec, "match") ?? "", exact = StrParam(spec, "part") ?? "";
+            string key = $"{type}|{size}|{match}|{exact}";
             if (_chosen.TryGetValue(key, out var part)) return part;
             if (!_candidates.TryGetValue(type, out var candidates)) _candidates[type] = candidates = Candidates(list, type);
-            return _chosen[key] = Resolve(candidates, size, match, what);
+            return _chosen[key] = exact.Length > 0 ? Exact(candidates, exact, what) : Resolve(candidates, size, match, what);
         }
     }
 }
