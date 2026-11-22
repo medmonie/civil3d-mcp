@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.14.0
+
+Plan and profile sheets from an office template, live-tested in Civil 3D 2027 on the Ridge ICD template
+(`tests\run_pp_sheets.bat`, ALL PASS; the four-sheet PDF checked page by page).
+
+- **`pp_sheets_plan` / `pp_sheets_create`.** Numbered layouts from a template sheet: profile viewport on the sheet's
+  profile views (views mode, split above `max_length`, default 500 m) or on stacked plain-CAD profile rows (rows mode,
+  `row_spacing` default 500 m); plan viewport zoomed to the sheet's alignments at a standard scale; list of lines,
+  sheet label `( nn / NN )` and scale bar updated; key-plan box moved only when the plan area is inside the key plan.
+- **`inspect_file`** reads a drawing without opening it: layouts, viewports, paper-space entities and attributes,
+  xrefs, blocks, views, page setups.
+- `list_entities` / `count_entities` take `layout`; `list_alignments` returns each alignment's `extents`;
+  `viewport_set` takes `on`.
+- `layout_from_template`: xrefs with relative paths are re-pathed to the template's folder; the template's viewports are
+  re-created (viewports copied from another drawing stay inactive and plot blank) and switched on with the layout
+  current. Replacing the current layout leaves it first.
+- `viewport_set` changes a viewport with its layout current, so the change is not undone by the layout's viewport cache
+  when the layout is next shown or plotted.
+
 ## 0.13.0
 
 Sheets and AutoCAD set-up: 5 read actions and 21 edit operations (46 / 90 in all), live-tested in Civil 3D 2027 (`tests\run_sheets.bat`, 42 checks, ALL PASS) and type-checked against the 2024 and 2025 APIs.

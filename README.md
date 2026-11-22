@@ -1,6 +1,6 @@
 # Civil 3D MCP bridge
 
-**Version 0.13 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
+**Version 0.14 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
 
 Lets Claude, ChatGPT and other MCP clients read the open Civil 3D drawing and edit it after you grant permission in Civil 3D.
 It covers:
@@ -238,7 +238,7 @@ sheet: `layout_from_template` (your office template's layout with its title bloc
 
 ## 4. Features
 
-One tool, `civil3d(action, params)`: 46 read actions, 7 QA / help / import actions, and 90 edit operations inside the
+One tool, `civil3d(action, params)`: 47 read actions, 9 QA / help / import / sheet actions, and 90 edit operations inside the
 single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTIONS.md)** and by `action="help"`.
 
 ### Read (never changes the drawing)
@@ -374,6 +374,34 @@ use metres. The node elevation is taken as ground level.
 
 > **Note.** No reducers or crosses are placed (the standard list has none). Nodes that would need one, and bends that
 > match no catalogue angle, are listed under `fittingsSkipped`; the pipes still meet there.
+
+### Plan and profile sheets from an office template
+
+`pp_sheets_plan` (read) and `pp_sheets_create` (import tool) turn an office sheet drawing — for example
+`PL23-RID-ICD-PRF.01-00.dwg`, layout `01` — into numbered layouts in the open drawing, one per sheet:
+
+1. The template layout is copied with its page setup, title block xref (re-pathed to the template folder), notes,
+   legend and its three viewports. The plan, profile and key-plan viewports are recognised by position and size
+   (`viewports` overrides the choice with handles from `inspect_file`).
+2. **Profiles.** `mode: views` uses the Civil 3D profile views in the drawing: they are grouped onto sheets in name
+   order, and a view longer than `max_length` (default 500 m) is split over several sheets. `mode: rows` is for
+   plain-CAD profiles stacked in rows (like `XR.ICD-PROFILES`): sheet *n* looks `row_spacing` (default 500 m) below sheet
+   *n-1*, starting from the template's own profile window, and `sheets` gives the line names of each sheet.
+3. **Plan.** The plan viewport is zoomed to the sheet's alignments plus 10 % at the smallest standard scale that fits
+   (`plan: template` keeps the template's plan area).
+4. **Texts.** The list of lines (layer `EN-LINE NAME`) is rewritten with the sheet's lines, the sheet label becomes
+   `PLAN/PROFILE ( nn / NN )`, and the scale bar is resized to the plan scale.
+5. **Key plan.** The highlight box moves to the sheet's plan area only when that area falls inside the key-plan
+   viewport; otherwise it is left where it is and the reply says so.
+
+```text
+pp_sheets_plan   {"template": "C:\\...\\Ridge plan&Profile\\PL23-RID-ICD-PRF.01-00.dwg", "template_layout": "01"}
+pp_sheets_create {... same ..., "layout_prefix": "PP-", "if_exists": "replace", "target": ..., "request_id": ...}
+plot_pdf         {"layouts": ["PP-01", "PP-02", ...], "path": "C:\\...\\PP sheets.pdf"}
+```
+
+> **Note.** Any scale text drawn inside the scale-bar block (e.g. "SCALE 1:100") is resized with the bar but not
+> rewritten; check it. Layouts are made in a first transaction and filled in a second, and the reply lists both stages.
 
 ## 5. What it cannot do
 

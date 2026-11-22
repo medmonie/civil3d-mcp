@@ -98,6 +98,11 @@ internal static class Db
         foreach (DBDictionaryEntry e in dict) yield return e;
     }
 
+    /// <summary>Model space, or the paper space of a layout when one is named.</summary>
+    public static BlockTableRecord SpaceOf(Database db, Transaction tr, string? layout) =>
+        layout == null || SameName(layout, "Model") ? ModelSpace(db, tr)
+            : (BlockTableRecord)tr.GetObject(FindLayout(db, tr, layout).BlockTableRecordId, OpenMode.ForRead);
+
     /// <summary>All paper-space layouts (not Model), in tab order.</summary>
     public static List<Layout> PaperLayouts(Database db, Transaction tr)
     {

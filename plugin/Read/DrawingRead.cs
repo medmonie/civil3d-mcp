@@ -82,7 +82,7 @@ internal static class DrawingRead
             int total = 0;
             bool needEntity = groupBy == "layer" || layerFilter != null;
 
-            foreach (ObjectId id in ModelSpace(db, tr))
+            foreach (ObjectId id in SpaceOf(db, tr, StrParam(p, "layout")))
             {
                 string key;
                 if (needEntity)
@@ -157,7 +157,7 @@ internal static class DrawingRead
     }
 
     /// <summary>Geometry of a plain AutoCAD entity, in a shape that is easy to reason about.</summary>
-    private static object? Geometry(Transaction tr, Entity ent) => ent switch
+    internal static object? Geometry(Transaction tr, Entity ent) => ent switch
     {
         Line l => new { start = P3(l.StartPoint), end = P3(l.EndPoint), length = R3(l.Length) },
         Polyline pl => new
@@ -211,7 +211,7 @@ internal static class DrawingRead
         return WithRead((db, tr) =>
         {
             // The DXF type is checked on the id, so entities of other types are never opened.
-            var matches = ModelSpace(db, tr).Cast<ObjectId>()
+            var matches = SpaceOf(db, tr, StrParam(p, "layout")).Cast<ObjectId>()
                 .Where(id => type == null || SameName(DxfOrName(id), type))
                 .Select(id => tr.GetObject(id, OpenMode.ForRead) as Entity)
                 .Where(ent => ent != null && (layer == null || SameName(ent.Layer, layer)) && InWindow(ent));

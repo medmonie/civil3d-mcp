@@ -175,4 +175,79 @@ internal static class SheetRead
             at = P3(br.Position), rotationDeg = Deg(br.Rotation), scale = R3(br.ScaleFactors.X), attributes, properties = props,
         };
     });
+
+    // ---------------------------------------------------------------- a drawing file on disk
+
+    /// <summary>
+    /// Read a .dwg / .dwt / .dxf from disk without opening it in the editor: layouts (paper, scale, viewports with
+    /// their scale and model area), what is drawn on each layout (block references with attributes, text), xrefs,
+    /// block definitions with their attribute tags, named views, page setups, and a summary of model space.
+    /// </summary>
+    public static object InspectFile(JsonElement p)
+    {
+        string path = Path.GetFullPath(NeedStr(p, "path"));
+        int limit = IntParam(p, "limit", 60, 1, 2000);
+        using var side = BlockOps.ReadSide(path, "inspect_file");
+        using var tr = side.TransactionManager.StartTransaction();
+        object Ent(Entity e) => new
+        {
+            handle = H(e.ObjectId), type = DxfOrName(e.ObjectId), layer = e.Layer,
+            block = e is BlockReference br ? Safe(() => ((BlockTableRecord)tr.GetObject(br.IsDynamicBlock ? br.DynamicBlockTableRecord : br.BlockTableRecord, OpenMode.ForRead)).Name) : null,
+            attributes = e is BlockReference b2 ? b2.AttributeCollection.Cast<ObjectId>().Select(id => (AttributeReference)tr.GetObject(id, OpenMode.ForRead))
+                .ToDictionary(a => a.Tag, a => a.TextString) : null,
+            geometry = Safe(() => DrawingRead.Geometry(tr, e)),
+        };
+
+        var layouts = new List<object>();
+        foreach (var l in PaperLayouts(side, tr))
+        {
+            var space = (BlockTableRecord)tr.GetObject(l.BlockTableRecordId, OpenMode.ForRead);
+            var ents = space.Cast<ObjectId>().Select(id => tr.GetObject(id, OpenMode.ForRead) as Entity).Where(e => e != null).Cast<Entity>().ToList();
+            var vps = ents.OfType<Viewport>().ToList();
+            var paper = vps.FirstOrDefault(v => Safe(() => v.Number) is int n && n == 1) ?? vps.FirstOrDefault();
+            layouts.Add(new
+            {
+                name = l.LayoutName, tabOrder = l.TabOrder, device = l.PlotConfigurationName, paper = l.CanonicalMediaName,
+                paperSize = new[] { R3(l.PlotPaperSize.X), R3(l.PlotPaperSize.Y) }, rotation = l.PlotRotation.ToString(), plotStyle = l.CurrentStyleSheet,
+                viewports = vps.Where(v => v != paper).Select(vp => new
+                {
+                    handle = H(vp.ObjectId), at = new[] { R3(vp.CenterPoint.X), R3(vp.CenterPoint.Y) }, width = R3(vp.Width), height = R3(vp.Height),
+                    scale = ScaleText(side, vp.CustomScale), customScale = vp.CustomScale,
+                    viewCenter = new[] { R3(vp.ViewTarget.X + vp.ViewCenter.X), R3(vp.ViewTarget.Y + vp.ViewCenter.Y) },
+                    viewTarget = new[] { R3(vp.ViewTarget.X), R3(vp.ViewTarget.Y) }, viewCenterDcs = new[] { R3(vp.ViewCenter.X), R3(vp.ViewCenter.Y) },
+                    viewHeight = R3(vp.ViewHeight), twistDeg = Deg(vp.TwistAngle), locked = vp.Locked, layer = vp.Layer,
+                    clipped = vp.NonRectClipOn,
+                    frozenLayers = Safe(() => vp.GetFrozenLayers().Cast<ObjectId>().Select(x => ((LayerTableRecord)tr.GetObject(x, OpenMode.ForRead)).Name).ToList()),
+                }).ToList(),
+                entities = ents.Where(e => e is not Viewport).Take(limit).Select(Ent).ToList(),
+                entityCount = ents.Count,
+            });
+        }
+
+        var bt = (BlockTable)tr.GetObject(side.BlockTableId, OpenMode.ForRead);
+        var xrefs = new List<object>();
+        var blocks = new List<object>();
+        foreach (ObjectId id in bt)
+        {
+            var b = (BlockTableRecord)tr.GetObject(id, OpenMode.ForRead);
+            if (b.IsLayout || b.IsAnonymous) continue;
+            if (b.IsFromExternalReference) { xrefs.Add(new { name = b.Name, path = b.PathName, overlay = Safe(() => b.IsFromOverlayReference) }); continue; }
+            if (b.IsDependent) continue;
+            var tags = b.Cast<ObjectId>().Where(x => x.ObjectClass.DxfName == "ATTDEF")
+                .Select(x => (AttributeDefinition)tr.GetObject(x, OpenMode.ForRead)).Select(a => new { tag = a.Tag, prompt = a.Prompt, value = a.TextString }).ToList();
+            blocks.Add(new { name = b.Name, attributes = tags, dynamic = b.IsDynamicBlock, references = Safe(() => b.GetBlockReferenceIds(true, false).Count) });
+        }
+        var views = ((ViewTable)tr.GetObject(side.ViewTableId, OpenMode.ForRead)).Cast<ObjectId>()
+            .Select(id => (ViewTableRecord)tr.GetObject(id, OpenMode.ForRead))
+            .Select(v => new { name = v.Name, target = new[] { R3(v.Target.X), R3(v.Target.Y) }, width = R3(v.Width), height = R3(v.Height), twistDeg = Deg(v.ViewTwist) }).ToList();
+        var pageSetups = Entries((DBDictionary)tr.GetObject(side.PlotSettingsDictionaryId, OpenMode.ForRead)).Select(e => e.Key).ToList();
+        var model = ModelSpace(side, tr).Cast<ObjectId>().ToList();
+        var byType = model.GroupBy(DxfOrName).OrderByDescending(g => g.Count()).Take(30).ToDictionary(g => g.Key, g => g.Count());
+        tr.Commit();
+        return new
+        {
+            path, units = side.Insunits.ToString(), layouts, xrefs, blocks = blocks.Take(300).ToList(), views, pageSetups,
+            modelSpace = new { count = model.Count, byType },
+        };
+    }
 }

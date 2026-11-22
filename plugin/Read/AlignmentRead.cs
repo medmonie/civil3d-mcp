@@ -18,6 +18,7 @@ internal static class AlignmentRead
             endStation = R3(a.EndingStation),
             entityCount = Safe(() => a.Entities.Count),
             profileCount = a.GetProfileIds().Count,
+            extents = Extents(a),
         }).ToList();
         return new { count = rows.Count, alignments = rows };
     });

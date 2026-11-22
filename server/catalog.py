@@ -29,14 +29,14 @@ READ_GROUPS: dict[str, Group] = {
         "ping": ("Connection check: bridge version, Civil 3D version, active drawing, whether editing is allowed.", {}),
         "get_drawing_info": ("Active drawing: path, units, object counts, the drawing target, and a fresh edit request UUID.", {}),
         "list_layers": ("Layers with on/frozen/locked/plot state, colour and xref flag.", {"limit?": "default 500"}),
-        "count_entities": ("Count model-space entities by DXF type or by layer.",
-                           {"group_by?": "'type' (default) or 'layer'", "layer?": "only this layer"}),
+        "count_entities": ("Count entities of model space (or a layout) by DXF type or by layer.",
+                           {"group_by?": "'type' (default) or 'layer'", "layer?": "only this layer", "layout?": "a paper-space layout instead of model space"}),
         "get_selection": ("Objects the user has selected in Civil 3D: handle, type, layer, Civil name, extents.", {"limit?": "default 200"}),
         "get_objects": ("Describe objects by handle: type, layer, Civil name, extents.", {"handles": "list of handle strings"}),
         "list_entities": ("AutoCAD entities in model space with their geometry: lines, polylines (vertices), circles, arcs, text, "
                           "mtext, points, block references (name, attributes), hatches, dimensions.",
                           {"type?": "DXF type, e.g. LINE, LWPOLYLINE, CIRCLE, ARC, TEXT, MTEXT, POINT, INSERT, HATCH", "layer?": "",
-                           "window?": "[xmin, ymin, xmax, ymax]", "limit?": "default 100"}),
+                           "window?": "[xmin, ymin, xmax, ymax]", "limit?": "default 100", "layout?": "a paper-space layout instead of model space"}),
         "list_blocks": ("Block definitions: name, attributes flag, number of references.", {"limit?": "default 500"}),
         "list_layouts": ("Layouts (paper space tabs): name, tab order, plot device, paper size.", {}),
     },
@@ -47,6 +47,9 @@ READ_GROUPS: dict[str, Group] = {
         "list_xrefs": ("External references: name, path, status (resolved, unloaded, not found), nested, references.", {}),
         "list_cad_styles": ("AutoCAD styles and set-up of one kind, with the current one.",
                             {"kind": "text_style | dim_style | mleader_style | table_style | linetype | layer_state | annotation_scale | page_setup"}),
+        "inspect_file": ("Read a drawing or template on disk without opening it: layouts (paper, viewports with scale and model "
+                         "area), block references and text on each layout, xrefs, blocks with attribute tags, named views, page setups.",
+                         {"path": "full path of a .dwg / .dwt / .dxf", "limit?": "entities listed per layout, default 60"}),
         "get_block_properties": ("A block reference: block name, attributes, and dynamic block properties with their allowed values.",
                                  {"handle": "", "visible_only?": "default true"}),
     },
@@ -128,6 +131,23 @@ WATERGEMS_INPUT = {
     "min_line_length?": "m, default 50", "valve_tolerance?": "m, default 3", "tap_tolerance?": "m, default 1.5",
 }
 
+PP_SHEETS_INPUT = {
+    "template": "full path of an office sheet drawing to copy (its layout has plan, profile and key-plan viewports, title block, list of lines, sheet label)",
+    "template_layout?": "layout in the template (default: its first)",
+    "mode?": "auto (default) | views (Civil 3D profile views in the drawing) | rows (plain-CAD profiles stacked in rows)",
+    "sheets?": "rows mode: [{lines: [names], plan_window?: [xmin, ymin, xmax, ymax]}, ...] one entry per sheet",
+    "row_spacing?": "rows mode: m between the profile rows of two sheets, default 500",
+    "first_row_center?": "rows mode: [x, y] profile centre of the first sheet (default: the template's)",
+    "max_length?": "views mode: most profile length on one sheet, default 500 (longer views are split)",
+    "profile_views?": "views mode: only these profile views",
+    "plan?": "fit (default: zoom to the sheet's alignments at a standard scale) | template (keep the template's plan area)",
+    "plan_scales?": "allowed plan scales N of 1:N, default 100 ... 10000", "plan_margin?": "default 0.1 (10 %)",
+    "first_sheet?": "number of the first sheet, default 1", "total_sheets?": "for the label ( n / total ), default: the last sheet",
+    "layout_prefix?": "default '' (layouts 01, 02, ...)", "line_layer?": "layer of the list of lines, default 'EN-LINE NAME'",
+    "label_contains?": "text of the sheet label, default 'PLAN/PROFILE'",
+    "viewports?": "{plan, profile, key}: template viewport handles (from inspect_file) when the automatic choice is wrong",
+}
+
 # computed in the MCP server from read actions; they never reach the plugin under these names
 LOCAL_ACTIONS: Group = {
     "help": ("This catalogue with every parameter. Pass topic to narrow it.", {"topic?": "an action or edit operation name"}),
@@ -149,6 +169,14 @@ LOCAL_ACTIONS: Group = {
                            "pipe_label_style, pipe_label_text, label_height_mm, alignment_label_set, profile_view_style, band_table",
                            "profile_view_style?": "overrides the presentation setting", "dry_run?": "validate the core network, profiles, and styles transaction",
                            "finish_attempt?": "default 1. Increment only after the preceding finishing transaction is confirmed rolled back."}),
+    "pp_sheets_plan": ("Plan and profile sheets from an office sheet template, without drawing: which profiles, lines, plan scale and "
+                       "label each sheet gets, and what was found in the template (viewports, list of lines, label, key-plan box, scale bar).",
+                       PP_SHEETS_INPUT),
+    "pp_sheets_create": ("Make plan and profile sheets as layouts of the open drawing from an office sheet template: per sheet the "
+                         "profile viewport on its profiles, the plan viewport zoomed to its lines, the key-plan box and scale bar "
+                         "adjusted, the list of lines and the sheet label rewritten. Run pp_sheets_plan first.",
+                         {**PP_SHEETS_INPUT, "target": "from get_drawing_info", "request_id": "new edit request UUID",
+                          "if_exists?": "error (default) | replace existing layouts of the same names"}),
     "watergems_check": ("Read a Bentley WaterGEMS export (and the drawing's CAD layers, when given) without drawing: pipes by "
                         "material and size, the catalogue parts that will stand in, CAD valves/services/hydrants matched to the "
                         "model, the profile lines of the mains, and where model and drawing differ.", WATERGEMS_INPUT),
@@ -161,7 +189,7 @@ LOCAL_ACTIONS: Group = {
                           "dry_run?": "validate the network transaction only"}),
 }
 
-IMPORT_ACTIONS = {"sewergems_import", "watergems_import"}
+IMPORT_ACTIONS = {"sewergems_import", "watergems_import", "pp_sheets_create"}
 
 # --------------------------------------------------------------------------- edit operations (inside action 'edit')
 
@@ -259,7 +287,8 @@ EDIT_GROUPS: dict[str, Group] = {
                              "lock?": "", "freeze_layers?": "layers frozen in this viewport only", "layer?": ""}),
         "viewport_set": ("Change a viewport: position, size, model area, scale, twist, lock, layers frozen in it.",
                          {"handle": "", "at?": "", "width?": "", "height?": "", "window?": "", "view_center?": "", "view?": "",
-                          "scale?": "", "custom_scale?": "", "twist_deg?": "", "lock?": "", "freeze_layers?": "", "thaw_layers?": ""}),
+                          "scale?": "", "custom_scale?": "", "twist_deg?": "", "lock?": "", "on?": "switch the viewport on/off",
+                          "freeze_layers?": "", "thaw_layers?": ""}),
         "view_create": ("Save a model-space area as a named view (for viewports and plotting).",
                         {"name": "", "window": "[xmin, ymin, xmax, ymax]", "twist_deg?": "", "if_exists?": "error (default) | replace"}),
         "drawing_save": ("Save the drawing; runs after the batch is committed. No path: save in place. path: Save As (the open drawing "
@@ -461,9 +490,9 @@ def tool_description(mode: str = "all") -> str:
     """Description advertised to MCP clients. Mode is 'all', 'read', 'edit' or 'import' (split mode's import tool)."""
     out: list[str] = []
     if mode == "import":
-        out.append("Import a Bentley SewerGEMS / WaterGEMS model into the drawing open in Civil 3D (it draws, so it needs "
-                   "edit permission). Call with action=<name> and params={...}; run the matching *_check action of the read "
-                   "tool first, and pass target and request_id from get_drawing_info.")
+        out.append("Import a Bentley SewerGEMS / WaterGEMS model, or make plan and profile sheets, in the drawing open in "
+                   "Civil 3D (it draws, so it needs edit permission). Call with action=<name> and params={...}; run the matching "
+                   "*_check / pp_sheets_plan action of the read tool first, and pass target and request_id from get_drawing_info.")
         out += _signatures({"Imports": {k: v for k, v in LOCAL_ACTIONS.items() if k in IMPORT_ACTIONS}})
         return "\n".join(out)
     if mode in ("all", "read"):

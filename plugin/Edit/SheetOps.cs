@@ -91,6 +91,9 @@ internal static class SheetOps
     internal static void DeleteLayout(string name)
     {
         var lm = LayoutManager.Current;
+        // Leave the layout first if it is the current one: otherwise the current layout is an erased object, the
+        // replacement with the same name looks current already, and its viewports cannot be switched on.
+        if (SameName(lm.CurrentLayout, name)) MakeCurrent("Model");
         string gone = $"~deleted {Guid.NewGuid():N}";
         lm.RenameLayout(name, gone);
         lm.DeleteLayout(gone);
@@ -196,6 +199,10 @@ internal static class SheetOps
     {
         const string op = "viewport_set";
         var vp = c.OpenByHandle<Viewport>(p, "a viewport");
+        // Change it with its layout current: a viewport that has been shown keeps its view in the layout's cache,
+        // and changes made while another layout is current are put back when the layout is shown or plotted.
+        var owner = (BlockTableRecord)c.Tr.GetObject(vp.OwnerId, OpenMode.ForRead);
+        MakeCurrent(((Layout)c.Tr.GetObject(owner.LayoutId, OpenMode.ForRead)).LayoutName);
         bool wasLocked = vp.Locked;
         vp.Locked = false;    // a locked viewport keeps its view; unlock to change it, then restore
         if (OptPt(p, "at", op) is Point3d at) vp.CenterPoint = new Point3d(at.X, at.Y, 0);
@@ -204,6 +211,12 @@ internal static class SheetOps
         Aim(c, vp, p, op, creating: false);
         vp.Locked = BoolParam(p, "lock") ?? wasLocked;
         FreezeThaw(c, vp, p);
+        vp.UpdateDisplay();
+        if (BoolParam(p, "on") is bool on && vp.On != on)
+        {
+            vp.On = on;
+            if (vp.On != on) c.Warn($"{op}: the viewport could not be switched {(on ? "on" : "off")}.");
+        }
         return Describe(c, vp);
     }
 
@@ -292,33 +305,92 @@ internal static class SheetOps
         // everything on the template layout except its own paper-space viewport (the first viewport)
         var ids = new ObjectIdCollection();
         var srcSpace = (BlockTableRecord)st.GetObject(src.BlockTableRecordId, OpenMode.ForRead);
+        // Viewports are not cloned: a viewport copied from another drawing comes in inactive and shows nothing on
+        // screen or in a plot. Their settings are read here and fresh viewports are made below.
+        var specs = new List<VpSpec>();
         bool skippedPaperViewport = false;
         foreach (ObjectId id in srcSpace)
         {
-            if (!skippedPaperViewport && id.ObjectClass.DxfName == "VIEWPORT") { skippedPaperViewport = true; continue; }
+            if (id.ObjectClass.DxfName == "VIEWPORT")
+            {
+                if (!skippedPaperViewport) { skippedPaperViewport = true; continue; }
+                var v = (Viewport)st.GetObject(id, OpenMode.ForRead);
+                var frozen = new List<string>();
+                foreach (ObjectId lid in v.GetFrozenLayers())
+                    if (st.GetObject(lid, OpenMode.ForRead) is LayerTableRecord ltr) frozen.Add(ltr.Name);
+                specs.Add(new VpSpec(v.CenterPoint, v.Width, v.Height, v.ViewTarget, v.ViewCenter, v.ViewHeight, v.ViewDirection,
+                                     v.TwistAngle, v.Locked, v.Layer, frozen, v.NonRectClipOn));
+                continue;
+            }
             ids.Add(id);
         }
         st.Commit();
 
         int viewports = 0;
+        var xrefs = new List<string>();
         if (ids.Count > 0)
         {
             var map = new IdMapping();
             side.WblockCloneObjects(ids, layout.BlockTableRecordId, map, DuplicateRecordCloning.Ignore, false);
+            var fixedXrefs = new ObjectIdCollection();
             foreach (IdPair pair in map)
             {
-                if (!pair.IsPrimary || !pair.IsCloned) continue;
-                if (c.Tr.GetObject(pair.Value, OpenMode.ForRead) is Viewport vp)
+                if (!pair.IsCloned) continue;
+                var obj = c.Tr.GetObject(pair.Value, OpenMode.ForRead);
+                // An xref with a relative path (XR.FRAME.dwg) is relative to the template's folder, not to this drawing.
+                if (obj is BlockTableRecord btr && btr.IsFromExternalReference && !string.IsNullOrEmpty(btr.PathName)
+                    && !Path.IsPathRooted(btr.PathName))
                 {
-                    vp.UpgradeOpen();
-                    vp.On = true;
-                    viewports++;
+                    string full = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!, btr.PathName));
+                    if (File.Exists(full))
+                    {
+                        btr.UpgradeOpen();
+                        btr.PathName = full;
+                        fixedXrefs.Add(btr.ObjectId);
+                        xrefs.Add($"{btr.Name} -> {full}");
+                    }
+                    else c.Warn($"{op}: xref '{btr.Name}' ({btr.PathName}) was not found next to the template.");
                 }
             }
+            if (fixedXrefs.Count > 0)
+            {
+                var db = c.Db;
+                c.AfterCommit.Add(() => db.ReloadXrefs(fixedXrefs));
+            }
         }
-        return new { layout = name, from = $"{Path.GetFileName(path)} / {src.LayoutName}", objects = ids.Count, viewports,
+        if (specs.Count > 0)
+        {
+            MakeCurrent(layout.LayoutName);     // a viewport can be switched on only while its layout is current
+            var layers = (LayerTable)c.Tr.GetObject(c.Db.LayerTableId, OpenMode.ForRead);
+            var space = (BlockTableRecord)c.Tr.GetObject(layout.BlockTableRecordId, OpenMode.ForWrite);
+            foreach (var v in specs)
+            {
+                var vp = new Viewport { CenterPoint = v.Center, Width = v.Width, Height = v.Height };
+                vp.SetDatabaseDefaults(c.Db);
+                if (layers.Has(v.Layer)) vp.Layer = v.Layer;
+                space.AppendEntity(vp);
+                c.Tr.AddNewlyCreatedDBObject(vp, true);
+                vp.ViewDirection = v.Direction;
+                vp.ViewTarget = v.Target;
+                vp.ViewCenter = v.ViewCenter;
+                vp.ViewHeight = v.ViewHeight;
+                vp.TwistAngle = v.Twist;
+                vp.On = true;
+                var frozen = v.Frozen.Where(n => layers.Has(n)).Select(n => layers[n]).ToList();
+                if (frozen.Count > 0) vp.FreezeLayersInViewport(frozen.GetEnumerator());
+                vp.Locked = v.Locked;
+                if (vp.On) viewports++;
+                if (v.Clipped) c.Warn($"{op}: a clipped (non-rectangular) viewport on the template was made rectangular on '{name}'.");
+            }
+            if (viewports < specs.Count)
+                c.Warn($"{op}: {specs.Count - viewports} of {specs.Count} viewports on '{name}' could not be switched on.");
+        }
+        return new { layout = name, from = $"{Path.GetFileName(path)} / {src.LayoutName}", objects = ids.Count, viewports, xrefsRepathed = xrefs,
                      plotDevice = layout.PlotConfigurationName, paper = layout.CanonicalMediaName };
     }
+
+    private sealed record VpSpec(Point3d Center, double Width, double Height, Point3d Target, Point2d ViewCenter, double ViewHeight,
+                                 Vector3d Direction, double Twist, bool Locked, string Layer, List<string> Frozen, bool Clipped);
 
     // ---------------------------------------------------------------- page setup
 

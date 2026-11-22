@@ -26,7 +26,7 @@ if "%FOUND%"=="0" goto fail
 
 echo [2/4] server exe >> "%LOG%"
 server\.venv\Scripts\python -m pip install -r server\requirements.txt pyinstaller >> "%LOG%" 2>&1 || goto fail
-server\.venv\Scripts\python -m PyInstaller --onefile --noconfirm --name c3d-mcp-server --collect-all mcp --paths server --hidden-import catalog --hidden-import qa --hidden-import bridge_client --hidden-import sewergems --hidden-import watergems --collect-submodules openpyxl --distpath dist\C3dMcp --workpath dist\_work --specpath dist\_work server\server.py >> "%LOG%" 2>&1 || goto fail
+server\.venv\Scripts\python -m PyInstaller --onefile --noconfirm --name c3d-mcp-server --collect-all mcp --paths server --hidden-import catalog --hidden-import qa --hidden-import bridge_client --hidden-import sewergems --hidden-import watergems --hidden-import sheets --collect-submodules openpyxl --distpath dist\C3dMcp --workpath dist\_work --specpath dist\_work server\server.py >> "%LOG%" 2>&1 || goto fail
 
 echo [3/4] installer zip >> "%LOG%"
 copy /y package\install.bat dist\C3dMcp\ >> "%LOG%" 2>&1

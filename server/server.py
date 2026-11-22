@@ -20,6 +20,7 @@ import catalog
 import qa
 import sewergems
 import watergems
+import sheets
 from bridge_client import EDIT_TIMEOUT, BridgeError, DrawingTarget, call
 
 def _help(params: dict[str, Any], *, include_edits: bool) -> dict[str, Any]:
@@ -66,6 +67,10 @@ def _dispatch(action: str, params: dict[str, Any] | None, allow_read: bool, allo
         if not allow_edit:
             raise ValueError("SewerGEMS import needs a write-enabled tool: civil3d, or civil3d_import in split mode.")
         return sewergems.build(params)
+    if name == "pp_sheets_create":
+        if not allow_edit:
+            raise ValueError("pp_sheets_create needs a write-enabled tool: civil3d, or civil3d_import in split mode.")
+        return sheets.build(params)
     if name == "watergems_import":
         if not allow_edit:
             raise ValueError("WaterGEMS import needs a write-enabled tool: civil3d, or civil3d_import in split mode.")
@@ -85,6 +90,8 @@ def _dispatch(action: str, params: dict[str, Any] | None, allow_read: bool, allo
         return sewergems.check(params)
     if name == "watergems_check":
         return watergems.check(params)
+    if name == "pp_sheets_plan":
+        return sheets.check(params)
     if name in catalog.READ_ACTIONS:
         return call(name, params)
     if name in catalog.EDIT_OPS:
