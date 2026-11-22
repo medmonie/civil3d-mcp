@@ -32,7 +32,8 @@ from uuid import UUID, uuid5
 from bridge_client import EDIT_TIMEOUT, BridgeError, call, drawing_target, edit_request_id
 
 MAX_BATCH_OPERATIONS = 500
-END_CLEARANCE = 2.0          # m; a valve or tap is kept this far from a pipe end or another valve/tap
+END_CLEARANCE = 2.0
+STAND_IN_OD = 1.15        # outside diameter / DN allowance for a stand-in pipe (ductile iron DN150 is 170 mm)          # m; a valve or tap is kept this far from a pipe end or another valve/tap
 ELBOW_MIN_DEFLECTION = 5.0   # degrees; below this two pipes simply meet
 ELBOW_ANGLE_TOLERANCE = 6.0  # degrees; a bend further than this from a catalogue elbow gets no elbow (reported)
 PLASTIC = ("pvc", "upvc", "pe", "hdpe", "mdpe", "ppr")
@@ -59,8 +60,19 @@ def _num(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def _sheet(book: Any, name: str) -> dict[str, dict[str, Any]]:
-    """First row of every element (by label) of one sheet, with lower-case column names."""
+STATIC_COLUMNS = ("x", "y", "elevation", "start node", "stop node", "diameter", "material", "length", "is active?")
+
+
+def _same(a: Any, b: Any) -> bool:
+    na, nb = _num(a), _num(b)
+    if na is not None and nb is not None:
+        return abs(na - nb) <= 1e-6 * max(1.0, abs(na))
+    return str(a).strip().casefold() == str(b).strip().casefold()
+
+
+def _sheet(book: Any, name: str, duplicates: list[str] | None = None) -> dict[str, dict[str, Any]]:
+    """First row of every element (by label) of one sheet, with lower-case column names. A label that appears again is
+    listed in duplicates (with whether its values differ), never merged silently."""
     if name not in book.sheetnames:
         return {}
     rows = book[name].iter_rows(values_only=True)
@@ -72,11 +84,22 @@ def _sheet(book: Any, name: str) -> dict[str, dict[str, Any]]:
         key = str(h or "").strip().lower()
         keys.append(key if key not in keys else "")      # the first of duplicate columns wins
     out: dict[str, dict[str, Any]] = {}
+    reported: set[str] = set()
     for r in rows:
         row = {k: v for k, v in zip(keys, r) if k}
         label = row.get("label")
-        if label not in (None, "") and str(label) not in out:
-            out[str(label)] = row
+        if label in (None, ""):
+            continue
+        if str(label) in out:
+            # A WaterGEMS extended-period export repeats every element once per time step with different results;
+            # only a row that disagrees on what is drawn (position, elevation, nodes, size, material) is a problem.
+            first = out[str(label)]
+            clash = sorted(k for k in STATIC_COLUMNS if k in row and k in first and not _same(first[k], row[k]))
+            if clash and duplicates is not None and str(label) not in reported:
+                reported.add(str(label))
+                duplicates.append(f"{name} '{label}' has rows that disagree on {', '.join(clash)}")
+            continue
+        out[str(label)] = row
     return out
 
 
@@ -92,13 +115,16 @@ def read(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"path: WaterGEMS workbook not found: {params.get('path')}")
     book = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
-        sheets = {n: _sheet(book, n) for n in ("Pipe", "Junction", "PRV", "Tank", "Reservoir", "Hydrant")}
+        duplicates: list[str] = []
+        sheets = {n: _sheet(book, n, duplicates) for n in ("Pipe", "Junction", "PRV", "Tank", "Reservoir", "Hydrant")}
     finally:
         book.close()
     if not sheets["Pipe"] or not sheets["Junction"]:
         raise ValueError(f"{path.name}: needs the sheets 'Pipe' and 'Junction' (WaterGEMS full output).")
 
     nodes: dict[str, dict[str, Any]] = {}
+    for label in set(sheets["Junction"]) & (set(sheets["PRV"]) | set(sheets["Tank"]) | set(sheets["Reservoir"]) | set(sheets["Hydrant"])):
+        duplicates.append(f"node '{label}' is in more than one sheet")
     kinds = {"Junction": "junction", "PRV": "prv", "Tank": "tank", "Reservoir": "reservoir", "Hydrant": "hydrant"}
     for sheet, kind in kinds.items():
         for label, r in sheets[sheet].items():
@@ -114,7 +140,7 @@ def read(params: dict[str, Any]) -> dict[str, Any]:
         pipes.append({"label": label, "start": str(r.get("start node") or ""), "stop": str(r.get("stop node") or ""),
                       "material": str(r.get("material") or "").strip() or "?", "diameter_mm": _num(r.get("diameter")),
                       "length": _num(r.get("length"))})
-    return {"source": str(path), "nodes": nodes, "pipes": pipes}
+    return {"source": str(path), "nodes": nodes, "pipes": pipes, "duplicates": duplicates}
 
 
 def nominal_mm(material: str, inner_mm: float, overrides: dict[str, Any] | None = None) -> int:
@@ -172,8 +198,15 @@ def _bearing(a: tuple[float, float], b: tuple[float, float]) -> float:
     return math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))
 
 
+CAD_LIMIT = 20000
+
+
 def _cad_entities(target: Any, layer: str) -> list[dict[str, Any]]:
-    return call("list_entities", {"layer": layer, "limit": 5000, "target": target}).get("entities", [])
+    reply = call("list_entities", {"layer": layer, "limit": CAD_LIMIT, "target": target})
+    if reply.get("truncated"):
+        raise ValueError(f"Layer '{layer}' holds more than {CAD_LIMIT} entities; the import would read only part of it. "
+                         "Isolate the network's objects on their own layer (or a smaller drawing) first.")
+    return reply.get("entities", [])
 
 
 def _segments(entity: dict[str, Any]) -> list[tuple[tuple[float, float], tuple[float, float]]]:
@@ -231,7 +264,10 @@ class _Parts:
         return None
 
     def stand_in(self, inner_mm: float) -> int:
-        return min(self.pipe_dn, key=lambda d: (abs(d - inner_mm), -d))
+        """Smallest listed DN that is not smaller than the bore (a stand-in never under-sizes the pipe); the largest
+        listed DN when the bore is bigger than all of them (reported as undersized)."""
+        bigger = [d for d in self.pipe_dn if d >= inner_mm - 0.5]
+        return min(bigger) if bigger else max(self.pipe_dn)
 
     def pipe(self, dn: int) -> str:
         part = self._take("Pipe", "Pipe", rf"pipe-{dn} mm-")
@@ -257,6 +293,9 @@ class _Parts:
     def valve(self, dn: int) -> str | None:
         return self._take("Appurtenance", "Valve", rf"gate valve-{dn} mm-")
 
+    def prv(self, dn: int) -> str | None:
+        return self._take("Appurtenance", "Valve", rf"(?=.*(pressure[- ]reduc|\bprv\b)).*-{dn} mm")
+
     def hydrant(self) -> str | None:
         return self._take("Appurtenance", "Hydrant", r".*hydrant")
 
@@ -265,6 +304,7 @@ def _plan(params: dict[str, Any], o: dict[str, Any], target: Any) -> dict[str, A
     data = read(params)
     nodes, pipes = data["nodes"], data["pipes"]
     problems, notes = validate(nodes, pipes)
+    problems += [f"Conflicting rows: {d}. Fix the export so each element has one position and size." for d in data.get("duplicates", [])]
     if problems:
         return {"problems": problems, "notes": notes, "source": data["source"]}
     used = {p["start"] for p in pipes} | {p["stop"] for p in pipes}
@@ -277,13 +317,15 @@ def _plan(params: dict[str, Any], o: dict[str, Any], target: Any) -> dict[str, A
         p["nominal"] = nominal_mm(p["material"], p["diameter_mm"], overrides)
         p["dn"] = parts.stand_in(p["diameter_mm"])
         p["part"] = parts.pipe(p["dn"])
-        report["standIns"][f"{p['material']} Ø{p['nominal']} -> DN{p['dn']}"] += 1
+        under = " UNDERSIZED (no larger pipe in the list)" if p["dn"] < p["diameter_mm"] - 0.5 else ""
+        report["standIns"][f"{p['material']} Ø{p['nominal']} -> DN{p['dn']}{under}"] += 1
 
-    # Laying depth: each node's pipes meet at one centreline level, set by the largest pipe there.
+    # Laying depth: each node's pipes meet at one centreline level, set by the largest pipe there - the larger of the
+    # real size and the stand-in part that is drawn. The built pipes' real cover is checked after the build.
     biggest: dict[str, float] = defaultdict(float)
     for p in pipes:
         for end in (p["start"], p["stop"]):
-            biggest[end] = max(biggest[end], p["nominal"] / 1000.0)
+            biggest[end] = max(biggest[end], max(p["nominal"], p["dn"] * STAND_IN_OD) / 1000.0)
     for k, n in nodes.items():
         n["z"] = n["ground"] - o["cover"] - biggest[k] / 2
 
@@ -407,7 +449,9 @@ def _network_ops(plan: dict[str, Any], o: dict[str, Any]) -> tuple[list[dict[str
         at = [n["x"], n["y"], n["z"]]
         if n["kind"] == "prv":
             dn = min(p["dn"] for p, _ in here)
-            part = parts.valve(dn)
+            part = parts.prv(dn)
+            if part is None and (part := parts.valve(dn)):
+                report["standIns"][f"PRV {label} -> gate valve DN{dn} (the parts list has no PRV DN{dn})"] += 1
             if part:
                 setting = f" {n['setting_bar']:g} BAR" if n.get("setting_bar") else ""
                 appurtenances.append({"id": label, "name": label, "part": part, "at": at, "description": f"PRV{setting} ({label})"})
@@ -467,20 +511,49 @@ def mains(plan: dict[str, Any], o: dict[str, Any]) -> list[dict[str, Any]]:
             adj[p["start"]].append((p["stop"], p))
             adj[p["stop"]].append((p["start"], p))
 
-        def farthest(start: str) -> tuple[float, list[str], list[dict[str, Any]]]:
-            best = (0.0, [start], [])
-            stack = [(start, 0.0, [start], [])]
-            while stack:
-                node, dist, path, used = stack.pop()
-                if dist > best[0]:
-                    best = (dist, path, used)
-                for nxt, p in adj[node]:
-                    if nxt not in path:
-                        stack.append((nxt, dist + length(p), path + [nxt], used + [p]))
-            return best
+        # Longest-first spanning tree (Kruskal), then its longest path by two sweeps: linear, even with loops.
+        root = {k: k for k in adj}
 
-        ends = [k for k in adj if len(adj[k]) == 1] or list(adj)
-        dist, path, used = max((farthest(e) for e in ends), key=lambda r: r[0])
+        def find(k: str) -> str:
+            while root[k] != k:
+                root[k] = root[root[k]]
+                k = root[k]
+            return k
+
+        tree: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
+        for p in sorted(left, key=length, reverse=True):
+            a, b = find(p["start"]), find(p["stop"])
+            if a != b:
+                root[a] = b
+                tree[p["start"]].append((p["stop"], p))
+                tree[p["stop"]].append((p["start"], p))
+
+        def farthest(start: str) -> tuple[float, list[str], list[dict[str, Any]]]:
+            dist, back = {start: 0.0}, {start: None}
+            todo = [start]
+            while todo:
+                node = todo.pop()
+                for nxt, p in tree[node]:
+                    if nxt not in dist:
+                        dist[nxt], back[nxt] = dist[node] + length(p), (node, p)
+                        todo.append(nxt)
+            end = max(dist, key=lambda k: dist[k])
+            path, used = [end], []
+            while back[path[-1]]:
+                prev, p = back[path[-1]]
+                path.append(prev)
+                used.append(p)
+            return dist[end], path[::-1], used[::-1]
+
+        component_best = []
+        seen: set[str] = set()
+        for k in adj:                      # one diameter per connected part; take the longest
+            if find(k) in seen:
+                continue
+            seen.add(find(k))
+            far = farthest(k)[1][-1]
+            component_best.append(farthest(far))
+        dist, path, used = max(component_best, key=lambda r: r[0])
         if not used:
             break
         left = [p for p in left if p not in used]
@@ -575,10 +648,43 @@ def _stations(nodes: dict[str, Any], chain: list[str]) -> list[float]:
 def _edit(target: Any, request_id: str, ops: list[dict[str, Any]], phase: str, dry_run: bool = False) -> dict[str, Any]:
     if len(ops) > MAX_BATCH_OPERATIONS:
         raise ValueError(f"WaterGEMS {phase} exceeds {MAX_BATCH_OPERATIONS} operations.")
-    status = call("get_edit_status", {"request_id": request_id, "target": target})
-    if status.get("state") == "completed" and isinstance(status.get("result"), dict):
-        return status["result"]        # a retry of an import that already ran
+    # A retry with the same request_id reaches the bridge, which returns the recorded result only when the operations
+    # (and dry_run) are identical and refuses a changed request.
     return call("edit", {"operations": ops, "target": target, "request_id": request_id, "dry_run": dry_run}, timeout=EDIT_TIMEOUT)
+
+
+def _cover_check(target: Any, network: str, wanted: float, plan: dict[str, Any], pieces: dict[str, list[str]]) -> dict[str, Any]:
+    """Cover of the pipes as built in Civil 3D: the real part's outside diameter and end elevations against the ground,
+    interpolated between the WaterGEMS node elevations of the pipe it belongs to."""
+    try:
+        reply = call("list_pressure_pipes", {"network_name": network, "limit": 5000, "target": target})
+    except Exception as exc:     # noqa: BLE001 - a check, never a reason to fail the import
+        return {"error": f"could not read the built pipes: {exc}"}
+    nodes = plan["nodes"]
+    parent = {pid: p for p in plan["pipes"] for pid in pieces.get(p["label"], [])}
+    covers = []
+    for r in reply.get("pipes", []):
+        p = parent.get(r.get("name"))
+        od = r.get("outerDiameter")
+        if not p or not isinstance(od, (int, float)):
+            continue
+        a, b = nodes[p["start"]], nodes[p["stop"]]
+        for pt, z in ((r.get("start"), r.get("startElevation")), (r.get("end"), r.get("endElevation"))):
+            if not pt or not isinstance(z, (int, float)):
+                continue
+            _, t = _project((pt[0], pt[1]), _xy(a), _xy(b))
+            ground = a["ground"] + t * (b["ground"] - a["ground"])
+            covers.append((ground - (z + od / 2), r["name"]))
+    if not covers:
+        return {"note": "no built pipes could be checked"}
+    worst: dict[str, float] = {}
+    for c, n in covers:
+        worst[n] = min(c, worst.get(n, c))
+    low = sorted((c, n) for n, c in worst.items() if c < wanted - 0.005)
+    return {"wanted": wanted, "min": round(min(worst.values()), 3), "pipesChecked": len(worst),
+            "belowWantedCount": len(low), "belowWanted": [f"{n}: {c:.3f} m" for c, n in low[:50]],
+            "basis": "built part outside diameter and elevations vs WaterGEMS ground, at both ends of every piece",
+            **({"truncated": True} if reply.get("truncated") else {})}
 
 
 def build(params: dict[str, Any]) -> dict[str, Any]:
@@ -588,6 +694,10 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
     dry_run = params.get("dry_run", False)
     if not isinstance(dry_run, bool):
         raise ValueError("'dry_run' must be true or false.")
+    at = params.get("profile_views_at")
+    if at is not None and not (isinstance(at, (list, tuple)) and len(at) == 2
+                               and all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in at)):
+        raise ValueError("profile_views_at must be [x, y] in drawing units.")
     if call("get_drawing_info", {"target": target})["civilDrawingUnits"] != "Meters":
         raise ValueError("WaterGEMS import requires a Civil 3D drawing set to metres.")
     plan = _plan(params, o, target)
@@ -609,7 +719,10 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
     core = _edit(target, request_id, core_ops, "network", dry_run)
     summary = _summary(plan, o)
     if not core.get("applied"):
-        return {"built": False, "dryRun": dry_run, "target": target, "core": core, **({"plan": summary} if dry_run else {})}
+        return {"built": False, "dryRun": dry_run, "networkCommitted": False, "target": target, "core": core,
+                **({"plan": summary} if dry_run else {})}
+    # From here on the network exists in the drawing: every later failure is reported with that fact.
+    stages: dict[str, Any] = {"network": "committed"}
 
     created = next((r["result"]["created"] for r in core["results"] if r["op"] == "pressure_add"), [])
     handle = {c["id"]: c["handle"] for c in created if c.get("id")}
@@ -639,8 +752,14 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
                             "label_set": o["alignment_label_set"], "layer": o["alignment_layer"]})
     profiles: dict[str, Any] = {}
     layout: dict[str, Any] = {"applied": True}
+
+    def failed(stage: str, reply: dict[str, Any]) -> str:
+        bad = [f"{r.get('op')}: {r.get('error')}" for r in reply.get("results", []) if r.get("error")]
+        return "; ".join(bad) or str(reply.get("error") or "rolled back")
+
     try:
         profiles = _edit(target, str(uuid5(UUID(request_id), "watergems-profiles")), profile_ops, "labels and profiles")
+        stages["labels and profiles"] = "committed" if profiles.get("applied") else "rolled back: " + failed("profiles", profiles)
         if lines:
             if profiles.get("applied"):
                 views = {v["name"]: v for v in call("list_profile_views", {"target": target})["profileViews"]}
@@ -656,12 +775,20 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
                     top -= y1 - y0 + o["profile_view_gap"]
                 if moves:
                     layout = _edit(target, str(uuid5(UUID(request_id), "watergems-layout")), moves, "profile layout")
-    except (BridgeError, ValueError) as exc:
-        return {"built": False, "network": net, "coreApplied": True, "target": target, "error": str(exc), "plan": summary}
+                    stages["profile layout"] = "committed" if layout.get("applied") else "rolled back: " + failed("layout", layout)
+    except Exception as exc:       # noqa: BLE001 - whatever failed, say that the network is already in the drawing
+        stages.setdefault("labels and profiles", f"failed: {type(exc).__name__}: {exc}")
+        return {"built": False, "network": net, "networkCommitted": True, "target": target, "request_id": request_id,
+                "stages": stages, "error": f"{type(exc).__name__}: {exc}",
+                "note": f"The pressure network '{net}' was created and stays in the drawing. Fix the cause and finish the "
+                        "labels/profiles by hand, or erase the network (pressure_network_erase) and import again with a new request_id.",
+                "plan": summary}
 
     reply = {
-        "built": bool(profiles.get("applied") and layout.get("applied")), "network": net, "target": target, "request_id": request_id,
+        "built": bool(profiles.get("applied") and layout.get("applied")), "network": net, "networkCommitted": True,
+        "target": target, "request_id": request_id, "stages": stages,
         **summary,
+        "coverCheck": _cover_check(target, net, o["cover"], plan, pieces),
         "partsPlaced": {k: sum(1 for c in created if c["kind"] == k) for k in ("pipe", "fitting", "appurtenance")},
         "connections": next((r["result"].get("connections") for r in core["results"] if r["op"] == "pressure_add"), None),
         "mains": [{"name": l["name"], "pipes": len(l["pipes"]), "length": round(l["length"], 1)} for l in lines],

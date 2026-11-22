@@ -193,7 +193,7 @@ internal static class DrawingRead
     {
         string? type = StrParam(p, "type");
         string? layer = StrParam(p, "layer");
-        int limit = IntParam(p, "limit", 100, 1, 2000);
+        int limit = IntParam(p, "limit", 100, 1, 20000);
         var win = NumList(p, "window", 4);
         if (Has(p, "window") && win.Count != 4) throw new ArgumentException("window must be [xmin, ymin, xmax, ymax].");
 

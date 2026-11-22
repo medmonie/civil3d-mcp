@@ -170,8 +170,8 @@ Commands in the Civil 3D command line:
 
 > **Note.** The permission is deliberately not remembered between Civil 3D sessions.
 > Add `--read-only` to the server arguments to expose only `civil3d_read`. For local clients that support per-tool
-> approvals, `C3D_MCP_SPLIT=1` exposes `civil3d_read` and `civil3d_edit` separately. Use the default combined tool
-> for SewerGEMS imports.
+> approvals, `C3D_MCP_SPLIT=1` exposes `civil3d_read`, `civil3d_edit` and `civil3d_import` (SewerGEMS / WaterGEMS imports)
+> separately.
 
 ---
 
@@ -331,7 +331,8 @@ the WE. P. DI layers), then build it."*
 | 2 | `watergems_import` | Builds it in the open drawing identified by `target`, with a unique `request_id`. |
 
 **Input.** The WaterGEMS *full output* workbook (`.xlsx`, sheets `Pipe` and `Junction`, plus `PRV` and others when
-present). Rows repeat per time step; the first row of each element is used. Metres and millimetres; the drawing must
+present). Rows repeat per time step; the first row of each element is used, and rows of one element that disagree on
+position, elevation, nodes, size or material stop the import. Metres and millimetres; the drawing must
 use metres. The node elevation is taken as ground level.
 
 **What is built.**
@@ -340,7 +341,8 @@ use metres. The node elevation is taken as ground level.
   becomes `P-438.1`, `P-438.2`, ... Pipes are laid with `cover` (default 1.0 m) to the top of pipe, at the largest
   pipe's depth where several meet.
 - **Fittings at the nodes:** a tee where three pipes meet, a bend where the route turns by a catalogue angle (11.25,
-  22.5, 45, 90 degrees), a valve for each PRV (described `PRV 3.5 BAR (PRV-62)`).
+  22.5, 45, 90 degrees), a pressure-reducing valve for each PRV (described `PRV 3.5 BAR (PRV-62)`); a gate valve stands
+  in when the parts list has no PRV of that size.
 - **From the CAD:** a gate valve wherever a valve chamber sits on a model pipe (`valve_layer`), a tee and service pipe
   for each service connection (`service_layers`, size read from the layer name). Hydrants (`hydrant_layer`) are
   listed and kept as the drawn blocks.
@@ -351,9 +353,15 @@ use metres. The node elevation is taken as ground level.
 
 > **Note. Stand-in parts.** Civil 3D places pressure parts from its parts list. When the list has no part of the real
 > material and size - the metric list of the standard template holds ductile iron 150-400 mm only - the nearest listed
-> size stands in, and the description and label keep the real size. Parts added to a list from the catalogue through
+> size that is not smaller than the WaterGEMS bore stands in (listed under `standIns`), and the description and label
+> keep the real size. Depth allows for the stand-in, and `coverCheck` in the reply gives the cover of every built
+> piece from its real outside diameter and elevations. Parts added to a list from the catalogue through
 > the API could not be placed in Civil 3D 2027, so the import uses what the list already holds. To get exact parts, add
 > PVC sizes to the parts list (or a catalogue that has them) in Civil 3D and run the import again on a fresh copy.
+
+> **Note. Partial imports.** The network, labels/profiles and profile layout are separate transactions. Once the
+> network is committed, every reply says `networkCommitted: true` and lists each stage (`stages`) with its error, so a
+> failed finishing stage never hides the network already in the drawing.
 
 > **Note.** No reducers or crosses are placed (the standard list has none). Nodes that would need one, and bends that
 > match no catalogue angle, are listed under `fittingsSkipped`; the pipes still meet there.

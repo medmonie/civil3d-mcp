@@ -137,14 +137,16 @@ async def split_tools(bridge_file: Path) -> None:
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = sorted(t.name for t in (await session.list_tools()).tools)
-            assert tools == ["civil3d_edit", "civil3d_read"], tools
+            assert tools == ["civil3d_edit", "civil3d_import", "civil3d_read"], tools
+            res = await session.call_tool("civil3d_import", {"action": "edit", "params": {}})
+            assert res.isError, "the import tool must run imports only"
             res = await session.call_tool("civil3d_read", {"action": "edit", "params": {"operations": [{"op": "layer_create", "name": "X"}]}})
             assert res.isError, "the read tool must refuse edits"
             info = parse(await session.call_tool("civil3d_read", {"action": "get_drawing_info"}))
             ok = parse(await session.call_tool("civil3d_edit", {"operations": [{"op": "layer_create", "name": "X"}],
                                                                "target": info["target"], "request_id": info["new_edit_request_id"]}))
             assert ok["applied"] is True, ok
-            print("split mode ok: civil3d_read refuses edits, civil3d_edit applies them")
+            print("split mode ok: civil3d_read refuses edits, civil3d_edit applies them, civil3d_import runs imports only")
 
 
 async def read_only(bridge_file: Path) -> None:
@@ -178,6 +180,7 @@ def static_checks() -> None:
     # one bundle component per supported release, each matching a build target in the csproj
     proj = (ROOT / "plugin" / "C3dMcpBridge.csproj").read_text(encoding="utf-8")
     for release, tfm in (("2024", "net48"), ("2025", "net8.0-windows"), ("2027", "net10.0-windows")):
+        assert 'Platform="AutoCAD*"' not in xml, "PackageContents.xml must load in Civil 3D only (Platform=\"Civil3D\")"
         assert f"./Contents/{release}/C3dMcpBridge.dll" in xml, f"PackageContents.xml has no Civil 3D {release} component"
         assert f"'$(TargetFramework)'=='{tfm}'" in proj and f"<C3dRelease>{release}</C3dRelease>" in proj, f"csproj does not build {release} as {tfm}"
     # every catalogue name must be registered in the plugin sources, and the other way round
@@ -221,4 +224,9 @@ if __name__ == "__main__":
     with_fake(declined, FAKE_EDIT="decline")
     with_fake(split_tools)
     with_fake(read_only)
+    # offline importer tests (each prints its own checks)
+    for script in ("watergems_test.py",):
+        run = subprocess.run([sys.executable, str(ROOT / "tests" / script)], capture_output=True, text=True)
+        assert run.returncode == 0, run.stdout + run.stderr
+        print(f"{script}: ok")
     print("\nALL OK")

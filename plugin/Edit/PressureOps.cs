@@ -137,16 +137,18 @@ internal static class PressureOps
                 catch (Exception ex) { throw new ArgumentException($"{what} ({PressureParts.Describe(part)}): {ex.Message}"); }
                 Describe(c, id, s, what);
 
-                // Connect the new part's ports, in order, to the pipe ends that meet at its location.
-                int made = 0;
-                try
+                // Connect the new part's ports, in order, to the pipe ends that meet at its location. Only a call that
+                // returns counts as a connection; a failed one is reported and the next pipe end gets the same port.
+                int made = 0, tried = 0;
+                var placed = (CivilDb.PressurePart)c.Tr.GetObject(id, OpenMode.ForWrite);
+                foreach (var (pipe, port) in pipeEnds.Near(at, planOnly: false))
                 {
-                    var placed = (CivilDb.PressurePart)c.Tr.GetObject(id, OpenMode.ForWrite);
-                    foreach (var (pipe, port) in pipeEnds.Near(at, planOnly: false))
-                        placed.ConnectToPipe(made++, pipe, port);
+                    tried++;
+                    try { placed.ConnectToPipe(made, pipe, port); made++; }
+                    catch (Exception ex) { c.Warn($"{what}: connecting port {made} to a pipe end failed: {ex.Message}"); }
                 }
-                catch (Exception ex) { c.Warn($"{what}: placed, but connecting failed after {made} connection(s): {ex.Message}"); }
-                if (made == 0) c.Warn($"{what}: no pipe end within {tolerance} of it, so it is not connected.");
+                if (tried == 0) c.Warn($"{what}: no pipe end within {tolerance} of it, so it is not connected.");
+                else if (made < tried) c.Warn($"{what}: {made} of {tried} pipe ends connected.");
                 connections += made;
                 created.Add(new { kind, id = StrParam(s, "id"), handle = H(id), part = PressureParts.Describe(part), connections = made });
             }

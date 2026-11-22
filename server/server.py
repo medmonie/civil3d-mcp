@@ -64,11 +64,11 @@ def _dispatch(action: str, params: dict[str, Any] | None, allow_read: bool, allo
 
     if name == "sewergems_import":
         if not allow_edit:
-            raise ValueError("SewerGEMS import requires the combined write-enabled civil3d tool.")
+            raise ValueError("SewerGEMS import needs a write-enabled tool: civil3d, or civil3d_import in split mode.")
         return sewergems.build(params)
     if name == "watergems_import":
         if not allow_edit:
-            raise ValueError("WaterGEMS import requires the combined write-enabled civil3d tool.")
+            raise ValueError("WaterGEMS import needs a write-enabled tool: civil3d, or civil3d_import in split mode.")
         return watergems.build(params)
 
     if not allow_read:
@@ -109,6 +109,12 @@ def create_server(*, read_only: bool = False) -> FastMCP:
         def civil3d_edit(operations: list[dict[str, Any]], target: DrawingTarget, request_id: str, dry_run: bool = False) -> Any:
             return _dispatch("edit", {"operations": operations, "target": target, "request_id": request_id,
                                       "dry_run": dry_run}, allow_read=False, allow_edit=True)
+
+        @mcp.tool(name="civil3d_import", description=catalog.tool_description("import"), annotations=READ_WRITE)
+        def civil3d_import(action: str, params: dict[str, Any] | None = None) -> Any:
+            if action not in catalog.IMPORT_ACTIONS:
+                raise ValueError(f"civil3d_import runs {', '.join(sorted(catalog.IMPORT_ACTIONS))} only.")
+            return _dispatch(action, params, allow_read=False, allow_edit=True)
 
     if not read_only and not split:
         @mcp.tool(name="civil3d", description=catalog.tool_description("all"), annotations=READ_WRITE)

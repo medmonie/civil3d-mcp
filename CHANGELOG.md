@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.1
+
+Fixes from an external review (ChatGPT/Codex test run), each with an offline regression test in `tests/watergems_test.py`:
+
+- WaterGEMS parts: a stand-in pipe is never smaller than the WaterGEMS bore (PVC Ø200 was drawn as DN150; now DN250). A PRV uses a pressure-reducing-valve part when the parts list has one; a gate-valve stand-in is listed in `standIns`. Laying depth allows for the stand-in's size, and the reply has `coverCheck`: the cover of every built piece from its real outside diameter and elevations against the WaterGEMS ground.
+- WaterGEMS failures are explicit: `profile_views_at` is checked before anything is drawn, and once the network is committed every reply says `networkCommitted: true` with the state of each stage (`stages`) and the error, including stages the bridge rolled back.
+- WaterGEMS retries go to the bridge, which compares the request (operations and `dry_run`) with the recorded one; the importer no longer returns a recorded result itself.
+- WaterGEMS input: rows of one element that disagree on position, elevation, nodes, size or material are a problem (repeated time-step rows are still accepted). A CAD layer with more entities than can be read is refused instead of read in part (`list_entities` now returns up to 20,000).
+- Mains for profiles are taken from a longest-first spanning tree, so looped networks plan in linear time (1,740-pipe grid: 0.1 s).
+- `pressure_add` counts only connections that succeeded and reports each failed one.
+- Split mode (`C3D_MCP_SPLIT=1`) adds `civil3d_import` for the SewerGEMS / WaterGEMS imports. The bundle loads in Civil 3D only (`Platform="Civil3D"`).
+
 ## 0.12.0
 
 - Civil 3D 2024 and 2025 support next to 2027, from one source tree. Each release gets its own DLL, compiled against its API and runtime: 2024 → .NET Framework 4.8 (`Contents\2024`, with System.Text.Json; `Compat.cs` and `AssemblyResolver.cs` bridge the missing .NET members), 2025 → .NET 8 (`Contents\2025`), 2027 → .NET 10 (`Contents\2027`). `PackageContents.xml` has one component per release, so one bundle and one installer (`dist\C3dMcp.zip`) serve all three.

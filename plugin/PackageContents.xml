@@ -3,7 +3,7 @@
                     AutodeskProduct="AutoCAD"
                     Name="C3dMcpBridge"
                     Description="Local MCP bridge for Civil 3D with drawing-scoped edit permission"
-                    AppVersion="0.12.0"
+                    AppVersion="0.12.1"
                     ProductType="Application"
                     Author="Local"
                     ProductCode="{3B8E5A52-7C41-4D0A-9E6F-21A4C7D90B13}"
@@ -13,7 +13,7 @@
   <!-- One component per Civil 3D release; AutoCAD loads only the one whose series matches. -->
   <Components Description="Civil 3D 2024 (.NET Framework 4.8)">
     <!-- Contents\2024 also holds System.Text.Json and its dependencies. -->
-    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R24.3" SeriesMax="R24.3" />
+    <RuntimeRequirements OS="Win64" Platform="Civil3D" SeriesMin="R24.3" SeriesMax="R24.3" />
     <ComponentEntry AppName="C3dMcpBridge"
                     ModuleName="./Contents/2024/C3dMcpBridge.dll"
                     AppDescription="Civil 3D MCP bridge (.NET Framework 4.8)"
@@ -21,7 +21,7 @@
   </Components>
 
   <Components Description="Civil 3D 2025 (.NET 8)">
-    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R25.0" SeriesMax="R25.0" />
+    <RuntimeRequirements OS="Win64" Platform="Civil3D" SeriesMin="R25.0" SeriesMax="R25.0" />
     <ComponentEntry AppName="C3dMcpBridge"
                     ModuleName="./Contents/2025/C3dMcpBridge.dll"
                     AppDescription="Civil 3D MCP bridge (.NET 8)"
@@ -29,7 +29,7 @@
   </Components>
 
   <Components Description="Civil 3D 2027 (.NET 10)">
-    <RuntimeRequirements OS="Win64" Platform="AutoCAD*" SeriesMin="R26.0" SeriesMax="R26.0" />
+    <RuntimeRequirements OS="Win64" Platform="Civil3D" SeriesMin="R26.0" SeriesMax="R26.0" />
     <ComponentEntry AppName="C3dMcpBridge"
                     ModuleName="./Contents/2027/C3dMcpBridge.dll"
                     AppDescription="Civil 3D MCP bridge (.NET 10)"

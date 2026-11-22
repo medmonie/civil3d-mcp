@@ -384,8 +384,14 @@ def _signatures(groups: dict[str, Group]) -> list[str]:
 
 
 def tool_description(mode: str = "all") -> str:
-    """Description advertised to MCP clients. Mode is 'all', 'read' or 'edit'."""
+    """Description advertised to MCP clients. Mode is 'all', 'read', 'edit' or 'import' (split mode's import tool)."""
     out: list[str] = []
+    if mode == "import":
+        out.append("Import a Bentley SewerGEMS / WaterGEMS model into the drawing open in Civil 3D (it draws, so it needs "
+                   "edit permission). Call with action=<name> and params={...}; run the matching *_check action of the read "
+                   "tool first, and pass target and request_id from get_drawing_info.")
+        out += _signatures({"Imports": {k: v for k, v in LOCAL_ACTIONS.items() if k in IMPORT_ACTIONS}})
+        return "\n".join(out)
     if mode in ("all", "read"):
         out.append("Work with the drawing open in Autodesk Civil 3D on this computer. Call with action=<name> and params={...}. "
                    "Reading never changes anything. Parameters ending in ? are optional. action='help' returns every "
