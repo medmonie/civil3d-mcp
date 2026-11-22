@@ -110,7 +110,9 @@ internal static class DrawOps
             Height = PositiveParam(p, "height") ?? DefaultTextHeight,
             Rotation = Rad(DblParam(p, "rotation_deg") ?? 0),
         };
-        return new { handle = H(c.Append(t, p)) };
+        var id = c.Append(t, p);
+        if (StrParam(p, "style") is string style) t.TextStyleId = c.Symbol(c.Db.TextStyleTableId, style, "Text style");
+        return new { handle = H(id) };
     }
 
     private static object DrawMText(EditContext c, JsonElement p)
@@ -123,7 +125,9 @@ internal static class DrawOps
             Rotation = Rad(DblParam(p, "rotation_deg") ?? 0),
         };
         if (PositiveParam(p, "width") is double width) t.Width = width;
-        return new { handle = H(c.Append(t, p)) };
+        var id = c.Append(t, p);
+        if (StrParam(p, "style") is string style) t.TextStyleId = c.Symbol(c.Db.TextStyleTableId, style, "Text style");
+        return new { handle = H(id) };
     }
 
     private static object DrawDimension(EditContext c, JsonElement p)
@@ -134,13 +138,16 @@ internal static class DrawOps
         var lineAt = NeedPt(p, "line_at", "draw_dimension");
         string text = StrParam(p, "text") ?? "";
         string type = Choice(p, "type", "aligned", "aligned", "horizontal", "vertical");
+        var dimStyle = StrParam(p, "style") is string ds ? c.Symbol(c.Db.DimStyleTableId, ds, "Dimension style") : c.Db.Dimstyle;
         var (dim, measured) = type switch
         {
-            "horizontal" => ((Dimension)new RotatedDimension(0, a, b, lineAt, text, c.Db.Dimstyle), Math.Abs(b.X - a.X)),
-            "vertical" => (new RotatedDimension(Math.PI / 2, a, b, lineAt, text, c.Db.Dimstyle), Math.Abs(b.Y - a.Y)),
-            _ => (new AlignedDimension(a, b, lineAt, text, c.Db.Dimstyle), a.DistanceTo(b)),
+            "horizontal" => ((Dimension)new RotatedDimension(0, a, b, lineAt, text, dimStyle), Math.Abs(b.X - a.X)),
+            "vertical" => (new RotatedDimension(Math.PI / 2, a, b, lineAt, text, dimStyle), Math.Abs(b.Y - a.Y)),
+            _ => (new AlignedDimension(a, b, lineAt, text, dimStyle), a.DistanceTo(b)),
         };
-        return new { handle = H(c.Append(dim, p)), type, measurement = R3(measured) };
+        var id = c.Append(dim, p);
+        dim.DimensionStyle = dimStyle;   // SetDatabaseDefaults sets the current style; keep the one asked for
+        return new { handle = H(id), type, measurement = R3(measured) };
     }
 
     private static object DrawLeader(EditContext c, JsonElement p)
@@ -152,6 +159,7 @@ internal static class DrawOps
 
         var ml = new MLeader();
         var id = c.Append(ml, p);
+        if (StrParam(p, "style") is string mls) ml.MLeaderStyle = c.MLeaderStyleId(mls);
         int line = ml.AddLeaderLine(ml.AddLeader());
         ml.AddFirstVertex(line, arrow);
         ml.AddLastVertex(line, textAt);

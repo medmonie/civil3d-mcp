@@ -4,7 +4,7 @@ Generated from `server/catalog.py` by `tools/gen_docs.py` - do not edit by hand.
 
 Everything goes through one MCP tool: `civil3d(action, params)`. A parameter ending in `?` is optional.
 
-## Read actions (41) - never change the drawing
+## Read actions (46) - never change the drawing
 
 ### Drawing (AutoCAD)
 
@@ -19,6 +19,16 @@ Everything goes through one MCP tool: `civil3d(action, params)`. A parameter end
 | `list_entities` | `type?` DXF type, e.g. LINE, LWPOLYLINE, CIRCLE, ARC, TEXT, MTEXT, POINT, INSERT, HATCH<br>`layer?`<br>`window?` [xmin, ymin, xmax, ymax]<br>`limit?` default 100 | AutoCAD entities in model space with their geometry: lines, polylines (vertices), circles, arcs, text, mtext, points, block references (name, attributes), hatches, dimensions. |
 | `list_blocks` | `limit?` default 500 | Block definitions: name, attributes flag, number of references. |
 | `list_layouts` | - | Layouts (paper space tabs): name, tab order, plot device, paper size. |
+
+### Sheets and drawing set-up (AutoCAD)
+
+| Name | Parameters | What it does |
+|---|---|---|
+| `list_viewports` | `layout?` only this layout<br>`include_paper?` also the layout's own paper-space viewport | Viewports on layouts: handle, position and size on paper, scale (1:N), model centre, twist, locked, frozen layers. |
+| `list_views` | - | Named views: centre, size, twist. |
+| `list_xrefs` | - | External references: name, path, status (resolved, unloaded, not found), nested, references. |
+| `list_cad_styles` | `kind` text_style \| dim_style \| mleader_style \| table_style \| linetype \| layer_state \| annotation_scale \| page_setup | AutoCAD styles and set-up of one kind, with the current one. |
+| `get_block_properties` | `handle`<br>`visible_only?` default true | A block reference: block name, attributes, and dynamic block properties with their allowed values. |
 
 ### Terrain
 
@@ -98,7 +108,7 @@ Everything goes through one MCP tool: `civil3d(action, params)`. A parameter end
 
 Run a batch of operations on a specific open drawing. First call get_drawing_info and verify the drawing name. Pass its target and new_edit_request_id as target and request_id. Use the target from the reads used to prepare this edit. A changed session or active drawing stops the edit. The drawing operations share one transaction. dry_run aborts that transaction after validation. File outputs run after commit. Editing requires permission for the target drawing. If the response is interrupted, check get_edit_status with the original target and request_id; resend only with the same parameters and request ID for a retry. A request whose state is 'error' changed nothing (for example Civil 3D was busy) and may be resent with the same request ID.
 
-## Edit operations (69) - items of `operations`
+## Edit operations (90) - items of `operations`
 
 ### Layers and existing objects
 
@@ -119,35 +129,66 @@ Run a batch of operations on a specific open drawing. First call get_drawing_inf
 
 | Name | Parameters | What it does |
 |---|---|---|
-| `draw_line` | `start` [x,y,z]<br>`end` [x,y,z]<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255 | Draw a line. |
-| `draw_polyline` | `points` [[x,y] or [x,y,z], ...]<br>`closed?`<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255 | Draw a polyline (2D if all z are equal, otherwise 3D). |
-| `draw_point` | `at` [x,y,z]<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255 | Draw an AutoCAD point. |
-| `draw_circle` | `center` [x,y,z]<br>`radius`<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255 | Draw a circle. |
-| `draw_arc` | `center` [x,y,z]<br>`radius`<br>`start_deg`<br>`end_deg`<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255 | Draw an arc, counter-clockwise from start_deg to end_deg (0 = east). |
-| `draw_text` | `text`<br>`at` [x,y,z]<br>`height?` default 2.5<br>`rotation_deg?`<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255 | Draw single-line text. |
-| `draw_mtext` | `text`<br>`at` [x,y,z]<br>`height?` default 2.5<br>`width?` wrap width<br>`rotation_deg?`<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255 | Draw multiline text (\P starts a new line). |
+| `draw_line` | `start` [x,y,z]<br>`end` [x,y,z]<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Draw a line. |
+| `draw_polyline` | `points` [[x,y] or [x,y,z], ...]<br>`closed?`<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Draw a polyline (2D if all z are equal, otherwise 3D). |
+| `draw_point` | `at` [x,y,z]<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Draw an AutoCAD point. |
+| `draw_circle` | `center` [x,y,z]<br>`radius`<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Draw a circle. |
+| `draw_arc` | `center` [x,y,z]<br>`radius`<br>`start_deg`<br>`end_deg`<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Draw an arc, counter-clockwise from start_deg to end_deg (0 = east). |
+| `draw_text` | `text`<br>`at` [x,y,z]<br>`height?` default 2.5<br>`rotation_deg?`<br>`style?` text style<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Draw single-line text. |
+| `draw_mtext` | `text`<br>`at` [x,y,z]<br>`height?` default 2.5<br>`width?` wrap width<br>`rotation_deg?`<br>`style?` text style<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Draw multiline text (\P starts a new line). |
 | `draw_annotations` | `items` [{op: draw_line \| draw_text \| draw_mtext, ...}, ...] | Draw up to 5,000 line and text items inside one edit operation. |
-| `draw_hatch` | `points` [[x,y], ...]<br>`pattern?` SOLID (default), ANSI31, AR-CONC, ...<br>`scale?`<br>`keep_boundary?` default true (associative hatch)<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255 | Hatch a closed boundary given by its corner points. |
-| `draw_dimension` | `from` [x,y]<br>`to` [x,y]<br>`line_at` [x,y] a point on the dimension line<br>`type?` aligned (default) \| horizontal \| vertical<br>`text?` override text<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255 | Draw a dimension between two points. |
-| `draw_leader` | `arrow_at` [x,y]<br>`text_at` [x,y]<br>`text`<br>`height?` default: the multileader style<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255 | Draw a multileader: an arrow with a text note. |
-| `draw_table` | `at` [x,y] top-left corner<br>`rows` [[cell, ...], ...]<br>`title?` merged title row<br>`text_height?` default 2.5<br>`row_height?`<br>`column_width?`<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255 | Draw a table from rows of cell values. |
+| `draw_hatch` | `points` [[x,y], ...]<br>`pattern?` SOLID (default), ANSI31, AR-CONC, ...<br>`scale?`<br>`keep_boundary?` default true (associative hatch)<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Hatch a closed boundary given by its corner points. |
+| `draw_dimension` | `from` [x,y]<br>`to` [x,y]<br>`line_at` [x,y] a point on the dimension line<br>`type?` aligned (default) \| horizontal \| vertical<br>`text?` override text<br>`style?` dimension style<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Draw a dimension between two points. |
+| `draw_leader` | `arrow_at` [x,y]<br>`text_at` [x,y]<br>`text`<br>`height?` default: the multileader style<br>`style?` multileader style<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Draw a multileader: an arrow with a text note. |
+| `draw_table` | `at` [x,y] top-left corner<br>`rows` [[cell, ...], ...]<br>`title?` merged title row<br>`text_height?` default 2.5<br>`row_height?`<br>`column_width?`<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Draw a table from rows of cell values. |
 
 ### Blocks
 
 | Name | Parameters | What it does |
 |---|---|---|
-| `draw_block` | `name`<br>`at` [x,y,z]<br>`scale?` default 1<br>`rotation_deg?`<br>`attributes?` {TAG: value, ...}<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255 | Insert a block that is already defined in the drawing (see list_blocks). |
+| `draw_block` | `name`<br>`at` [x,y,z]<br>`scale?` default 1<br>`rotation_deg?`<br>`attributes?` {TAG: value, ...}<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Insert a block that is already defined in the drawing (see list_blocks). |
 | `block_define` | `name`<br>`handles` list<br>`base` [x,y] insertion base point<br>`replace_originals?` erase them and insert the block in their place | Define a block from existing plain AutoCAD entities. |
 | `attribute_set` | `handle`<br>`attributes` {TAG: value, ...} | Change attribute values of a block reference. |
+| `block_import` | `path` full path<br>`blocks?` block names to copy; omit to bring the whole file in as one block<br>`as_block?` name for the whole-file block (default: the file name)<br>`replace?` redefine blocks the drawing already has (default false) | Bring block definitions in from another drawing (.dwg/.dwt/.dxf), or the whole file as one block. |
+| `title_block_insert` | `layout`<br>`path?` full path of the title block drawing<br>`block?` block name (in that file, or already defined)<br>`at?` [x,y] on paper, default [0,0]<br>`scale?`<br>`rotation_deg?`<br>`attributes?` {TAG: value, ...}<br>`replace?` redefine if already in the drawing<br>`layer?` | Put a title block on a layout and fill its attributes; with path it is first brought in from that file. |
+| `dynamic_block_set` | `handle`<br>`properties` {name: value, ...} | Set dynamic block properties (visibility state, distances, flip...). get_block_properties lists them. |
 
-### Drawing file
+### Drawing file and sheets
 
 | Name | Parameters | What it does |
 |---|---|---|
 | `layout_create` | `name` | Create a layout (paper space tab). |
-| `xref_attach` | `path` full path to a .dwg<br>`name?`<br>`at?` [x,y,z] default origin<br>`layer?` | Attach a drawing as an external reference. |
+| `layout_delete` | `name` | Delete a layout. |
+| `layout_from_template` | `path` full path of the template<br>`layout?` layout in the template (default: its first)<br>`name?` new layout name (default: the template layout's)<br>`if_exists?` error (default) \| replace | New layout copied from a layout of a template (.dwt/.dwg): its page setup, title block, viewports and notes, with the blocks, layers and styles they use (ones the drawing has are kept). |
+| `page_setup_set` | `layout`<br>`page_setup?` named page setup to apply first<br>`device?` e.g. 'DWG To PDF.pc3'<br>`paper?` words of a paper size, e.g. 'ISO full bleed A1'<br>`plot_style?` e.g. monochrome.ctb<br>`rotation?` 0 \| 90 \| 180 \| 270<br>`scale?` '1:1' \| 'fit' \| '1:N'<br>`center?` | Page setup of a layout: a named page setup, plot device, paper, plot style, rotation, scale. |
+| `viewport_create` | `layout`<br>`at` [x,y] centre on paper (mm)<br>`width` on paper<br>`height` on paper<br>`window?` [xmin, ymin, xmax, ymax] in model space<br>`view_center?` [x,y] in model space<br>`view?` named view<br>`scale?` "1:500" (paper mm to drawing units)<br>`custom_scale?` paper units per drawing unit, instead of scale<br>`twist_deg?` view twist (counter-clockwise), e.g. to run an alignment along the sheet<br>`lock?`<br>`freeze_layers?` layers frozen in this viewport only<br>`layer?` | Create a viewport on a layout showing a model area at a scale. Give the area as window (fitted unless scale is given), as view_center + scale, or as a named view. |
+| `viewport_set` | `handle`<br>`at?`<br>`width?`<br>`height?`<br>`window?`<br>`view_center?`<br>`view?`<br>`scale?`<br>`custom_scale?`<br>`twist_deg?`<br>`lock?`<br>`freeze_layers?`<br>`thaw_layers?` | Change a viewport: position, size, model area, scale, twist, lock, layers frozen in it. |
+| `view_create` | `name`<br>`window` [xmin, ymin, xmax, ymax]<br>`twist_deg?`<br>`if_exists?` error (default) \| replace | Save a model-space area as a named view (for viewports and plotting). |
 | `drawing_save` | `path?` full path<br>`copy?` default false<br>`format?` dwg (default) \| dxf<br>`overwrite?` default false | Save the drawing; runs after the batch is committed. No path: save in place. path: Save As (the open drawing continues under the new name). path + copy:true: write a copy and keep working in the original. format dxf: export. |
-| `plot_pdf` | `path` full path ending in .pdf<br>`layout?` default: the current tab<br>`paper?` words of a paper size, e.g. 'A1' or 'ISO full bleed A3'<br>`plot_style?` e.g. monochrome.ctb<br>`overwrite?` default false | Plot one layout (or model space) to a PDF with 'DWG To PDF.pc3'; runs after the batch is committed. Model space is plotted to its extents, fitted to the paper; a paper-space layout is plotted 1:1 as laid out. |
+| `plot_pdf` | `path?` full path ending in .pdf<br>`layout?` default: the current tab<br>`layouts?` list of layout names, or "all"<br>`folder?` folder for one PDF per layout ('<drawing> - <layout>.pdf')<br>`paper?` words of a paper size, e.g. 'A1' or 'ISO full bleed A3'<br>`plot_style?` e.g. monochrome.ctb<br>`overwrite?` default false | Plot to PDF with 'DWG To PDF.pc3'; runs after the batch is committed. One layout (path + layout), several layouts as one multi-sheet PDF (path + layouts), or one PDF per layout (folder + layouts). Model space is plotted to its extents, fitted to the paper; a layout keeps its own page setup (paper, scale). One multi-sheet PDF needs the same paper and orientation on every layout (an AutoCAD plot-engine limit); use folder for mixed sizes. |
+
+### External references and underlays
+
+| Name | Parameters | What it does |
+|---|---|---|
+| `xref_attach` | `path` full path to a .dwg<br>`name?`<br>`at?` [x,y,z] default origin<br>`layer?`<br>`layout?` | Attach a drawing as an external reference. |
+| `xref_reload` | `names?` xref names | Reload xrefs (all when names is omitted); runs after the commit. |
+| `xref_detach` | `names` xref names | Detach xrefs; runs after the commit. |
+| `xref_bind` | `names` xref names<br>`insert?` true: plain names (Insert); default Bind (xref$0$ prefixes) | Bind xrefs into the drawing; runs after the commit. |
+| `underlay_attach` | `path` full path<br>`at?` [x,y] lower-left, default origin<br>`page?` PDF page, default 1<br>`scale?` PDF scale factor, default 1<br>`width?` image width in drawing units<br>`rotation_deg?`<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Attach a PDF page or an image (png, jpg, tif, bmp, gif) as an underlay. |
+
+### AutoCAD styles and set-up
+
+| Name | Parameters | What it does |
+|---|---|---|
+| `text_style_create` | `name`<br>`font?` arial.ttf (default), romans.shx, ...<br>`height?` 0 = set per text (default)<br>`width_factor?`<br>`oblique_deg?`<br>`set_current?`<br>`if_exists?` error (default) \| skip \| replace | Create (or update) a text style. |
+| `dim_style_create` | `name`<br>`based_on?`<br>`text_style?`<br>`text_height?`<br>`arrow_size?`<br>`extension_offset?`<br>`extension_beyond?`<br>`text_gap?`<br>`decimals?`<br>`overall_scale?`<br>`linear_scale?`<br>`text_above?` true: text above the dimension line, aligned with it<br>`set_current?`<br>`if_exists?` error (default) \| skip \| replace | Create (or update) a dimension style, starting from based_on or the current style. |
+| `mleader_style_create` | `name`<br>`based_on?`<br>`text_style?`<br>`text_height?`<br>`arrow_size?`<br>`landing_gap?`<br>`dogleg_length?` 0 = no dogleg<br>`set_current?`<br>`if_exists?` error (default) \| skip \| replace | Create (or update) a multileader style. |
+| `linetype_load` | `names` e.g. ["DASHED", "CENTER"]<br>`file?` default acadiso.lin (metric) / acad.lin | Load linetypes from a .lin file. |
+| `annotation_scale_add` | `scale` "1:500"<br>`name?` default '1:500'<br>`set_current?` | Add an annotation scale (paper mm to drawing units) and optionally make it current. |
+| `layer_state_save` | `name`<br>`description?`<br>`if_exists?` error (default) \| skip \| replace | Save the current layer settings (on, frozen, locked, plot, colour, linetype...) as a layer state. |
+| `layer_state_restore` | `name` | Restore a saved layer state. |
+| `purge` | `kinds?` blocks \| layers \| linetypes \| text_styles \| dim_styles \| mleader_styles \| table_styles \| regapps (default all)<br>`list_only?` report what is unused without removing it | Remove unused blocks, layers, linetypes, styles and regapps (repeated until nothing more is unused). |
 
 ### Terrain
 

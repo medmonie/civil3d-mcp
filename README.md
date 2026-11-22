@@ -1,6 +1,6 @@
 # Civil 3D MCP bridge
 
-**Version 0.12 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
+**Version 0.13 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
 
 Lets Claude, ChatGPT and other MCP clients read the open Civil 3D drawing and edit it after you grant permission in Civil 3D.
 It covers:
@@ -210,6 +210,12 @@ Open the drawing in Civil 3D, then ask your AI assistant in plain language. It c
   e.g. 150) and `match` (words in it, e.g. "ductile"); a gravity part by `family` and `inner_diameter`. If the assistant says
   several parts match, give one more word.
 
+**Sheets.** Every draw operation (text, lines, blocks, tables...) takes `layout` to draw on paper space. A typical
+sheet: `layout_from_template` (your office template's layout with its title block), `viewport_create` with
+`window` or `scale: "1:500"`, `attribute_set` / `title_block_insert` for the title block text, then `plot_pdf` with
+`layouts: "all"` for one multi-sheet PDF. Paper space is in millimetres; a 1:500 viewport in a metre drawing shows
+0.5 m per paper millimetre.
+
 **What a tool call looks like**
 
 ```json
@@ -232,7 +238,7 @@ Open the drawing in Civil 3D, then ask your AI assistant in plain language. It c
 
 ## 4. Features
 
-One tool, `civil3d(action, params)`: 41 read actions, 7 QA / help / import actions, and 69 edit operations inside the
+One tool, `civil3d(action, params)`: 46 read actions, 7 QA / help / import actions, and 90 edit operations inside the
 single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTIONS.md)** and by `action="help"`.
 
 ### Read (never changes the drawing)
@@ -240,6 +246,7 @@ single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTI
 | Group | What the client can read |
 |---|---|
 | Drawing (AutoCAD) | Drawing info, layers, entity counts by type or layer, your selection, objects by handle, entities with geometry (lines, polylines, circles, arcs, text, blocks with attributes, hatches, dimensions), blocks, layouts |
+| Sheets and set-up | Viewports (scale, model area, twist, frozen layers), named views, xrefs with status, text / dimension / multileader / table styles, linetypes, layer states, annotation scales, page setups, a block's attributes and dynamic properties |
 | Terrain | Surfaces and their elevations, elevation at a point, cut / fill of a volume surface, COGO points, feature lines, parcels |
 | Alignments | Alignments, station / offset to point and back, profiles, profile elevation at a station, profile views, sample lines, section views |
 | Corridors | Corridors with baselines, regions and corridor surfaces; assemblies with their subassemblies |
@@ -255,8 +262,10 @@ single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTI
 |---|---|
 | Layers and existing objects | Create and change layers; set layer, colour, linetype; move, copy, rotate, scale, erase; change text; rename / describe / restyle Civil 3D objects |
 | Drawing (AutoCAD) | Lines, polylines (2D and 3D), points, circles, arcs, text, multiline text, hatches, dimensions (aligned, horizontal, vertical), multileaders, tables |
-| Blocks | Insert blocks with attribute values, define a block from entities, change attribute values |
-| Drawing file | Create layouts, attach xrefs, save / save as / save a copy / export DXF, plot a layout or model space to PDF |
+| Blocks | Insert blocks with attribute values (in model space or on a layout), define a block from entities, change attribute values, bring blocks in from another drawing, title blocks, dynamic block properties |
+| Drawing file and sheets | Layouts (create, delete, copy from a template with its title block and viewports), page setups, viewports (at a scale, from a window or a named view, twisted, locked, layers frozen per viewport), named views, save / save as / save a copy / export DXF, PDF of one layout, a multi-sheet PDF, or one PDF per layout |
+| External references | Attach, reload, detach and bind xrefs; PDF and image underlays |
+| AutoCAD styles and set-up | Text, dimension and multileader styles; linetypes; annotation scales; layer states; purge |
 | Terrain | COGO points (add, change, remove); TIN surfaces from points, breaklines (from points or from feature lines), boundaries, rebuild; volume surfaces with cut / fill; feature lines |
 | Alignments | Alignments from PIs with curves; layout profiles from PVIs; surface profiles; profile views (with network parts); sample lines; section views |
 | Corridors | Assemblies from stock subassemblies; corridors (alignment + profile + assembly); corridor surfaces; rebuild |
@@ -377,6 +386,8 @@ use metres. The node elevation is taken as ground level.
 | Create object styles, band styles, parts lists from scratch | Band contents are not exposed by the API; the others are not built yet | Use the styles of your template by name. Label styles can be created (`label_style_create`), and catalogue families can be added to a parts list |
 | Civil 3D 2026 or older than 2024 | Built for 2024, 2025 and 2027 only (2026 is not tested) | - |
 | Change the size of an existing pressure part (`pressure_part_set` with `size`) in Civil 3D 2024 | The 2024 API has no swap-size method | Delete the part and add it again with the new size |
+| One multi-sheet PDF of layouts on different papers (A1 + A0) | AutoCAD's plot engine puts only same-size sheets in one document | `plot_pdf` with `folder` (one PDF per layout), or make the papers alike with `page_setup_set` |
+| Audit a drawing | Not in the .NET API (command only) | Run AUDIT in Civil 3D |
 | Run AutoCAD commands or scripts | Left out on purpose (no arbitrary code execution) | - |
 
 Also good to know:

@@ -18,6 +18,8 @@ internal static class EditEngine
         DrawOps.Register(Ops);
         BlockOps.Register(Ops);
         DocumentOps.Register(Ops);
+        CadOps.Register(Ops);
+        SheetOps.Register(Ops);
         // Civil 3D
         TerrainOps.Register(Ops);
         AlignmentOps.Register(Ops);

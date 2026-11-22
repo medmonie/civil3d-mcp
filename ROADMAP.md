@@ -1,6 +1,6 @@
 # Roadmap
 
-This file has two parts: what the Civil 3D MCP does today (v0.11.0), and what could be added next, with an effort estimate and a priority for each item.
+This file has two parts: what the Civil 3D MCP does today (v0.13.0), and what could be added next, with an effort estimate and a priority for each item.
 
 **Effort** (one developer, including the live test in Civil 3D):
 
@@ -21,13 +21,14 @@ This file has two parts: what the Civil 3D MCP does today (v0.11.0), and what co
 
 ---
 
-## 1. What it does today (v0.11.0)
+## 1. What it does today (v0.13.0)
 
-41 read actions and 69 edit operations, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. A dry run executes and rolls back. Each edit names the drawing it is for and carries a request ID, so it cannot land in the wrong drawing or run twice. Editing needs permission per drawing (`MCPALLOW` or the dialog). Works with Claude, ChatGPT desktop and Codex; ChatGPT in a browser connects read-only. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
+46 read actions and 90 edit operations, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. A dry run executes and rolls back. Each edit names the drawing it is for and carries a request ID, so it cannot land in the wrong drawing or run twice. Editing needs permission per drawing (`MCPALLOW` or the dialog). Works with Claude, ChatGPT desktop and Codex; ChatGPT in a browser connects read-only. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
 
 | Area | Read | Create / edit |
 |---|---|---|
-| **Drawing (AutoCAD)** | Drawing info, layers, entity counts, selection, objects by handle, entities by type/layer, blocks, layouts | Layers. Move, copy, rotate, scale and erase objects. Lines, polylines, points, circles, arcs, text, mtext, hatches, dimensions, leaders, tables. Blocks and attributes. Layouts, xrefs, save / save as, **plot to PDF** |
+| **Drawing (AutoCAD)** | Drawing info, layers, entity counts, selection, objects by handle, entities by type/layer, blocks, layouts | Layers. Move, copy, rotate, scale and erase objects. Lines, polylines, points, circles, arcs, text, mtext, hatches, dimensions, leaders, tables (in model space or on a layout). Blocks and attributes, blocks from other drawings, dynamic blocks. Save / save as |
+| **Sheets and set-up (AutoCAD)** | Viewports, named views, xrefs, styles, layer states, annotation scales, page setups, block properties | Layouts from templates, page setups, viewports, named views, title blocks, **PDF: one layout, multi-sheet, or one per layout**. Text / dimension / multileader styles, linetypes, annotation scales, layer states, purge. Xrefs (attach, reload, detach, bind), PDF and image underlays |
 | **Terrain** | Surfaces (with elevation and volume), COGO points, feature lines, parcels | COGO points. TIN surfaces from points, breaklines and boundaries. Volume surfaces, feature lines, rebuild |
 | **Alignments and profiles** | Alignments, station ↔ point, profiles, profile elevation, profile views, sample lines, section views | Alignments with curves. Profiles from PVIs or from a surface. Profile views (style, ranges, bands), parts shown in views. Sample lines, section views |
 | **Corridors** | Corridors, assemblies | Assemblies, corridors, corridor surfaces, rebuild |
@@ -62,11 +63,47 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 | 7 | **Crossing and clearance check** | M | Find where gravity and pressure pipes cross, report the vertical clearance at each crossing and flag those below a set minimum. |
 | 8 | **SewerGEMS model vs drawing check** | M | After an import, compare the drawing's network (names, inverts, sizes, lengths) with the export and list differences, so later edits in Civil 3D can be checked against the model. |
 
+### P1 — sheets and AutoCAD (done in 0.13, pending live test of each)
+
+| # | Feature | Effort | Why / notes |
+|---|---|---|---|
+| 27 | ✅ 0.13 **Viewports** | M | Create and change viewports on a layout: size, position, scale (1:500…), centre or model window, rotation, lock, layers frozen per viewport. |
+| 28 | ✅ 0.13 **Named views** | S | Save a model-space area as a view; build a viewport from it. |
+| 29 | ✅ 0.13 **Title block from a file** | S | Bring a block (or a whole DWG) in from another file, place it on a layout and fill its attributes (title, sheet number, revision). Draw operations take a `layout` so text and blocks can go on paper space. |
+| 30 | ✅ 0.13 **Layout from a template** | M | Copy a layout with its page setup, title block and viewports from a .dwt / .dwg; set device, paper, plot style and scale of a layout. |
+| 31 | ✅ 0.13 **Multi-sheet PDF** | M | Several layouts into one PDF, or one PDF per layout, each with its own page setup. |
+| 32 | ✅ 0.13 **AutoCAD styles** | M | Text styles, dimension styles, multileader styles, linetypes from .lin files, annotation scales. |
+| 33 | ✅ 0.13 **Layer states, purge** | S | Save / restore layer states; purge unused layers, blocks, styles and linetypes. |
+| 34 | ✅ 0.13 **Xrefs and underlays** | M | List xrefs with status; reload, detach, bind. Attach PDF and image underlays. |
+| 35 | ✅ 0.13 **Dynamic blocks** | S | Read and set dynamic block properties (visibility, distances, flip). |
+
+### P2 — sheets and AutoCAD, next
+
+| # | Feature | Effort | Why / notes |
+|---|---|---|---|
+| 36 | **Plan and profile sheets** | L | Frames along an alignment, one layout per frame with a rotated plan viewport and the matching profile view, match lines. Replaces #9 with an MCP-native version (Civil 3D's Plan Production is only partly in the API). |
+| 37 | **Sheet index table** | S | Sheet number, title and revision across layouts, drawn as a table. |
+| 38 | **Fields and data tables** | M | Fields in text (sheet number, file name, date) and tables built from object data (pipe schedules, coordinate tables). |
+| 39 | **Geolocation / coordinate system** | S | Read and set the drawing's coordinate system. |
+| 40 | **Audit** | S | Not in the .NET API; would need a command call. |
+| 46 | **Multi-sheet PDF with mixed paper sizes** | M | AutoCAD's plot engine puts only same-size sheets in one PDF; Autodesk points to the Publish API (DSD) for mixed A1 / A0 sets. |
+| 47 | **"Fit to paper" for a layout PDF** | S | `page_setup_set scale: "fit"` on a layout did not change the PDF in the live test (an A0 layout on A1 paper stayed 1:1). Same-size plotting is correct. |
+
+### Civil 3D, added
+
+| # | Feature | Effort | Priority | Why / notes |
+|---|---|---|---|---|
+| 41 | **Pipe and structure tables** | S | P2 | Civil 3D tables in the drawing, not only the Excel BOQ. |
+| 42 | **Point files, point groups, description keys** | M | P2 | Survey import with the office's description keys. |
+| 43 | **Surface analysis** | M | P2 | Elevation and slope banding, slope arrows, watersheds, cut/fill reports. |
+| 44 | **Alignment from polyline, intersections, superelevation** | M–L | P2 | Road layout from a sketch. |
+| 45 | **Interference check and hydraulic grade line** | M | P2 | Network checks beyond the crossing report (#7). |
+
 ### P2 — useful
 
 | # | Feature | Effort | Why / notes |
 |---|---|---|---|
-| 9 | **Plan and profile sheets** (view frames, sheet layouts) | L | Sheet generation through Plan Production. The API covers part of it; the rest needs layouts and viewports set up by code. |
+| 9 | ~~Plan and profile sheets~~ | → #36 | Moved to the sheet section. |
 | 10 | **CAD to network** | M | Turn polylines and blocks from a consultant's CAD into a gravity network, using block positions and attribute levels. |
 | 11 | **LandXML import / export** | M | Exchange surfaces, alignments and networks with other software and authorities. |
 | 12 | **Surface from contours / DEM** | M | Build a surface from contour polylines with their elevations, or from a DEM file. |

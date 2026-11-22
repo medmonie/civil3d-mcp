@@ -46,7 +46,8 @@ internal static class DocumentOps
         string name = NeedStr(p, "name");
         var lm = LayoutManager.Current;
         if (lm.LayoutExists(name)) throw new ArgumentException($"Layout '{name}' already exists.");
-        return new { layout = name, handle = H(lm.CreateLayout(name)) };
+        CheckSymbolName(name, "layout");
+        return new { layout = name, handle = H(SheetOps.CreateLayout(c, name).ObjectId) };
     }
 
     private static object XrefAttach(EditContext c, JsonElement p)
@@ -113,25 +114,71 @@ internal static class DocumentOps
 
     // ---------------------------------------------------------------- plot to PDF
 
+    /// <summary>
+    /// One layout to one PDF (path, layout?), several layouts to one multi-sheet PDF (path + layouts), or one PDF per
+    /// layout (folder + layouts). 'layouts' is a list of names or "all" (every paper-space layout in tab order).
+    /// </summary>
     private static object PlotPdf(EditContext c, JsonElement p)
     {
-        string target = FullPath(p, "plot_pdf", ".pdf");
-        CheckWritable(p, "plot_pdf", target);
-        string? layout = StrParam(p, "layout");
-        if (layout != null && !LayoutManager.Current.LayoutExists(layout)) throw new ArgumentException($"plot_pdf: layout '{layout}' not found. Use list_layouts.");
         string? paper = StrParam(p, "paper");
         string? plotStyle = StrParam(p, "plot_style");
         var doc = c.Doc;
-        c.AfterCommit.Add(() => Plot(doc, layout, target, paper, plotStyle));
-        return new
+        List<string>? layouts = null;
+        if (Has(p, "layouts"))
         {
-            queued = true, target, layout = layout ?? "(current)",
-            note = $"Plotted with '{PdfPlotter}' after the batch is committed. Model space is plotted to its extents, fitted; a layout is plotted as laid out.",
-        };
+            var v = p.GetProperty("layouts");
+            layouts = v.ValueKind == JsonValueKind.String && SameName(v.GetString(), "all")
+                ? PaperLayouts(c.Db, c.Tr).Select(l => l.LayoutName).ToList()
+                : StrList(p, "layouts", 500).Select(n => FindLayout(c.Db, c.Tr, n).LayoutName).ToList();
+            if (layouts.Count == 0) throw new ArgumentException("plot_pdf: no layouts to plot.");
+        }
+
+        if (StrParam(p, "folder") is string folder)
+        {
+            if (layouts == null) throw new ArgumentException("plot_pdf: 'folder' plots one PDF per layout; give layouts (a list or \"all\").");
+            if (!Path.IsPathFullyQualified(folder) || !Directory.Exists(folder)) throw new ArgumentException($"plot_pdf: folder not found: {folder}");
+            string stem = Path.GetFileNameWithoutExtension(doc.Name);
+            var files = new List<string>();
+            foreach (var l in layouts)
+            {
+                string file = Path.Combine(folder, $"{stem} - {FileSafe(l)}.pdf");
+                if (File.Exists(file) && !(BoolParam(p, "overwrite") ?? false))
+                    throw new ArgumentException($"plot_pdf: {file} already exists (pass overwrite: true to replace it).");
+                files.Add(file);
+            }
+            c.AfterCommit.Add(() => { for (int i = 0; i < layouts.Count; i++) Plot(doc, new List<string?> { layouts[i] }, files[i], paper, plotStyle); });
+            return new { queued = true, files, layouts, note = $"One PDF per layout with '{PdfPlotter}', after the batch is committed." };
+        }
+
+        string target = FullPath(p, "plot_pdf", ".pdf");
+        CheckWritable(p, "plot_pdf", target);
+        if (layouts == null)
+        {
+            string? layout = StrParam(p, "layout");
+            if (layout != null) layout = FindLayout(c.Db, c.Tr, layout).LayoutName;
+            c.AfterCommit.Add(() => Plot(doc, new List<string?> { layout }, target, paper, plotStyle));
+            return new
+            {
+                queued = true, target, layout = layout ?? "(current)",
+                note = $"Plotted with '{PdfPlotter}' after the batch is committed. Model space is plotted to its extents, fitted; a layout is plotted as laid out.",
+            };
+        }
+        // AutoCAD's plot engine puts only sheets of the same paper and orientation into one PDF; check before committing.
+        var papers = layouts.Select(n => FindLayout(c.Db, c.Tr, n))
+            .GroupBy(l => paper ?? $"{l.CanonicalMediaName} / {l.PlotRotation}").ToList();
+        if (papers.Count > 1)
+            throw new ArgumentException("plot_pdf: one multi-sheet PDF needs every layout on the same paper and orientation. These differ: " +
+                string.Join("; ", papers.Select(g => $"{g.Key}: {string.Join(", ", g.Select(l => l.LayoutName))}")) +
+                ". Give 'paper' for all of them, set them alike with page_setup_set, or use 'folder' for one PDF per layout.");
+        var sheets = layouts.Cast<string?>().ToList();
+        c.AfterCommit.Add(() => Plot(doc, sheets, target, paper, plotStyle));
+        return new { queued = true, target, sheets = layouts, note = $"One multi-sheet PDF with '{PdfPlotter}', after the batch is committed; each layout uses its own page setup." };
     }
 
+    private static string FileSafe(string name) => string.Concat(name.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch));
+
     /// <summary>The canonical name of the first paper size whose canonical or display name contains 'paper'.</summary>
-    private static string FindPaper(PlotSettingsValidator validator, PlotSettings settings, string paper)
+    internal static string FindPaper(PlotSettingsValidator validator, PlotSettings settings, string paper)
     {
         foreach (string? canonical in validator.GetCanonicalMediaNameList(settings))
         {
@@ -140,7 +187,7 @@ internal static class DocumentOps
             if (canonical.Contains(paper, StringComparison.OrdinalIgnoreCase) || display.Contains(paper, StringComparison.OrdinalIgnoreCase))
                 return canonical;
         }
-        throw new ArgumentException($"No paper size of '{PdfPlotter}' matches '{paper}' (try e.g. 'A1', 'A3', 'ISO full bleed A1').");
+        throw new ArgumentException($"No paper size of '{settings.PlotConfigurationName}' matches '{paper}' (try e.g. 'A1', 'A3', 'ISO full bleed A1').");
     }
 
     /// <summary>The layout's own page setup, redirected to the PDF plotter (with the paper and plot style asked for).</summary>
@@ -149,60 +196,71 @@ internal static class DocumentOps
         var settings = new PlotSettings(layout.ModelType);
         settings.CopyFrom(layout);
         var validator = PlotSettingsValidator.Current;
+        // Keep the layout's own paper: switching the device with no paper falls back to the device default (Letter).
+        string media = layout.CanonicalMediaName;
+        var size = layout.PlotPaperSize;
         validator.SetPlotConfigurationName(settings, PdfPlotter, null);
         validator.RefreshLists(settings);
         if (paper != null) validator.SetCanonicalMediaName(settings, FindPaper(validator, settings, paper));
-        validator.SetUseStandardScale(settings, true);
+        else if (!layout.ModelType)
+        {
+            bool known = false;
+            foreach (string? m in validator.GetCanonicalMediaNameList(settings))
+                if (string.Equals(m, media, StringComparison.OrdinalIgnoreCase)) { known = true; break; }
+            if (known) validator.SetCanonicalMediaName(settings, media);
+            else if (size.X > 0 && size.Y > 0) validator.SetClosestMediaName(settings, size.X, size.Y, PlotPaperUnit.Millimeters, true);
+        }
         if (layout.ModelType)
         {
+            validator.SetUseStandardScale(settings, true);
             validator.SetPlotType(settings, AcDb.PlotType.Extents);
             validator.SetStdScaleType(settings, StdScaleType.ScaleToFit);
             validator.SetPlotCentered(settings, true);
         }
-        else
-        {
-            validator.SetPlotType(settings, AcDb.PlotType.Layout);
-            validator.SetStdScaleType(settings, StdScaleType.StdScale1To1);
-        }
+        // a paper-space layout keeps its own plot area and scale (1:1 as laid out, or what page_setup_set chose)
         if (plotStyle != null) validator.SetCurrentStyleSheet(settings, plotStyle);
         return settings;
     }
 
-    private static void Plot(Document doc, string? layoutName, string target, string? paper, string? plotStyle)
+    /// <summary>Plot the layouts (null = the current one) as the pages of one PDF, in the foreground.</summary>
+    private static void Plot(Document doc, List<string?> layoutNames, string target, string? paper, string? plotStyle)
     {
         if (PlotFactory.ProcessPlotState != ProcessPlotState.NotPlotting)
             throw new InvalidOperationException("Another plot is in progress.");
         object oldBackground = CoreApp.GetSystemVariable("BACKGROUNDPLOT");
         CoreApp.SetSystemVariable("BACKGROUNDPLOT", (short)0);   // plot in the foreground so the file exists when we return
+        var lm = LayoutManager.Current;
+        string original = lm.CurrentLayout;
         try
         {
+            // a layout is plotted only while it is current; switch to the first one before the plot starts
+            SheetOps.MakeCurrent(layoutNames[0] ?? original);
             using var tr = doc.Database.TransactionManager.StartTransaction();
-            var lm = LayoutManager.Current;
-            string name = layoutName ?? lm.CurrentLayout;
-            if (!SameName(lm.CurrentLayout, name)) lm.CurrentLayout = name;
-            var layout = (Layout)tr.GetObject(lm.GetLayoutId(name), OpenMode.ForRead);
-
-            using var settings = PdfSettings(layout, paper, plotStyle);
-            using var info = new PlotInfo { Layout = layout.ObjectId, OverrideSettings = settings };
-            using var infoValidator = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled };
-            infoValidator.Validate(info);
-
-            using (var engine = PlotFactory.CreatePublishEngine())
-            using (var page = new PlotPageInfo())
+            using var engine = PlotFactory.CreatePublishEngine();
+            engine.BeginPlot(null, null);
+            for (int i = 0; i < layoutNames.Count; i++)
             {
-                engine.BeginPlot(null, null);
-                engine.BeginDocument(info, doc.Name, null, 1, true, target);
-                engine.BeginPage(page, info, true, null);
+                string name = layoutNames[i] ?? original;
+                SheetOps.MakeCurrent(name);
+                var layout = (Layout)tr.GetObject(lm.GetLayoutId(name), OpenMode.ForRead);
+                using var settings = PdfSettings(layout, paper, plotStyle);
+                using var info = new PlotInfo { Layout = layout.ObjectId, OverrideSettings = settings };
+                using var infoValidator = new PlotInfoValidator { MediaMatchingPolicy = MatchingPolicy.MatchEnabled };
+                infoValidator.Validate(info);
+                if (i == 0) engine.BeginDocument(info, doc.Name, null, 1, true, target);
+                using var page = new PlotPageInfo();
+                engine.BeginPage(page, info, i == layoutNames.Count - 1, null);
                 engine.BeginGenerateGraphics(null);
                 engine.EndGenerateGraphics(null);
                 engine.EndPage(null);
-                engine.EndDocument(null);
-                engine.EndPlot(null);
             }
+            engine.EndDocument(null);
+            engine.EndPlot(null);
             tr.Commit();
         }
         finally
         {
+            try { SheetOps.MakeCurrent(original); } catch { /* keep going */ }
             try { CoreApp.SetSystemVariable("BACKGROUNDPLOT", oldBackground); } catch { /* keep going */ }
         }
     }

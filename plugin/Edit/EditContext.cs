@@ -30,22 +30,46 @@ internal sealed class EditContext
     /// <summary>The layer named by the 'layer' parameter; the current layer when it is absent.</summary>
     public ObjectId Layer(JsonElement p) => LayerId(Db, Tr, StrParam(p, "layer"));
 
-    /// <summary>Add a new entity to model space, on 'layer' when given.</summary>
-    public ObjectId Append(Entity e, string? layer = null)
+    /// <summary>Add a new entity to model space (or the given space), on 'layer' when given.</summary>
+    public ObjectId Append(Entity e, string? layer = null, BlockTableRecord? space = null)
     {
         e.SetDatabaseDefaults(Db);
         if (!string.IsNullOrEmpty(layer)) e.LayerId = LayerId(Db, Tr, layer);
-        var id = ModelSpace(Db, Tr, OpenMode.ForWrite).AppendEntity(e);
+        var id = (space ?? ModelSpace(Db, Tr, OpenMode.ForWrite)).AppendEntity(e);
         Tr.AddNewlyCreatedDBObject(e, true);
         return id;
     }
 
-    /// <summary>Add a new entity to model space, applying the operation's 'layer' and 'color' when given.</summary>
+    /// <summary>Add a new entity to model space, or to the paper space of the operation's 'layout', applying its
+    /// 'layer' and 'color' when given.</summary>
     public ObjectId Append(Entity e, JsonElement p)
     {
-        var id = Append(e, StrParam(p, "layer"));
+        var id = Append(e, StrParam(p, "layer"), Space(p));
         if (Has(p, "color")) e.Color = Aci(p);
         return id;
+    }
+
+    /// <summary>A named record of a symbol table (text styles, dimension styles, linetypes, views...).</summary>
+    public ObjectId Symbol(ObjectId tableId, string name, string what)
+    {
+        var table = (SymbolTable)Tr.GetObject(tableId, OpenMode.ForRead);
+        return table.Has(name) ? table[name] : throw new ArgumentException($"{what} '{name}' not found. Use list_cad_styles.");
+    }
+
+    /// <summary>A multileader style by name.</summary>
+    public ObjectId MLeaderStyleId(string name)
+    {
+        var dict = (DBDictionary)Tr.GetObject(Db.MLeaderStyleDictionaryId, OpenMode.ForRead);
+        foreach (DBDictionaryEntry e in dict) if (SameName(e.Key, name)) return e.Value;
+        throw new ArgumentException($"Multileader style '{name}' not found. Use list_cad_styles.");
+    }
+
+    /// <summary>The block a new entity goes into: model space, or the paper space of the 'layout' parameter.</summary>
+    public BlockTableRecord Space(JsonElement p)
+    {
+        string? layout = StrParam(p, "layout");
+        if (layout == null || SameName(layout, "Model")) return ModelSpace(Db, Tr, OpenMode.ForWrite);
+        return (BlockTableRecord)Tr.GetObject(FindLayout(Db, Tr, layout).BlockTableRecordId, OpenMode.ForWrite);
     }
 
     /// <summary>

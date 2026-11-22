@@ -24,6 +24,11 @@ internal static class Registry
         Read("list_entities", DrawingRead.ListEntities);
         Read("list_blocks", DrawingRead.ListBlocks);
         Read("list_layouts", DrawingRead.ListLayouts);
+        Read("list_viewports", SheetRead.ListViewports);
+        Read("list_views", SheetRead.ListViews);
+        Read("list_xrefs", SheetRead.ListXrefs);
+        Read("list_cad_styles", SheetRead.ListCadStyles);
+        Read("get_block_properties", SheetRead.GetBlockProperties);
         // terrain
         Read("list_surfaces", TerrainRead.ListSurfaces);
         Read("get_surface_elevation", TerrainRead.GetSurfaceElevation);

@@ -82,6 +82,60 @@ internal static class Db
 
     // ---------------------------------------------------------------- drawing lookups
 
+    /// <summary>A layout by name (case-insensitive), from the drawing's layout dictionary.</summary>
+    public static Layout FindLayout(Database db, Transaction tr, string name, OpenMode mode = OpenMode.ForRead)
+    {
+        var dict = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+        foreach (DBDictionaryEntry e in dict)
+            if (SameName(e.Key, name)) return (Layout)tr.GetObject(e.Value, mode);
+        throw new ArgumentException($"Layout '{name}' not found. Use list_layouts.");
+    }
+
+    /// <summary>The entries of a DWG dictionary. (Cast&lt;DBDictionaryEntry&gt;() fails: the untyped enumerator gives
+    /// System.Collections.DictionaryEntry; only the typed foreach gives DBDictionaryEntry.)</summary>
+    public static IEnumerable<DBDictionaryEntry> Entries(DBDictionary dict)
+    {
+        foreach (DBDictionaryEntry e in dict) yield return e;
+    }
+
+    /// <summary>All paper-space layouts (not Model), in tab order.</summary>
+    public static List<Layout> PaperLayouts(Database db, Transaction tr)
+    {
+        var dict = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead);
+        return Entries(dict).Select(e => (Layout)tr.GetObject(e.Value, OpenMode.ForRead))
+            .Where(l => !l.ModelType).OrderBy(l => l.TabOrder).ToList();
+    }
+
+    /// <summary>Millimetres in one drawing unit (INSUNITS); metres when the drawing does not say.</summary>
+    public static double UnitMm(Database db) => db.Insunits switch
+    {
+        UnitsValue.Millimeters => 1, UnitsValue.Centimeters => 10, UnitsValue.Decimeters => 100, UnitsValue.Meters => 1000,
+        UnitsValue.Kilometers => 1e6, UnitsValue.Inches => 25.4, UnitsValue.Feet => 304.8, UnitsValue.Yards => 914.4,
+        _ => 1000,
+    };
+
+    /// <summary>A drawing scale given as "1:500", "500" or 500 -> 500 (the N of 1:N).</summary>
+    public static double? ScaleDenominator(JsonElement p, string name)
+    {
+        if (!Has(p, name)) return null;
+        var v = p.GetProperty(name);
+        string s = Text(v).Trim().Trim('"');
+        if (s.Contains(':'))
+        {
+            var parts = s.Split(':');
+            if (parts.Length == 2 && double.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var a)
+                && double.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var b) && a > 0 && b > 0)
+                return b / a;
+        }
+        else if (double.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var n) && n > 0)
+            return n;
+        throw new ArgumentException($"'{name}' must be a drawing scale such as \"1:500\" or 500.");
+    }
+
+    /// <summary>"1:500" for a viewport's custom scale (paper mm per drawing unit).</summary>
+    public static string ScaleText(Database db, double customScale) =>
+        customScale > 0 ? $"1:{Math.Round(UnitMm(db) / customScale, 3):0.###}" : "?";
+
     public static BlockTableRecord ModelSpace(Database db, Transaction tr, OpenMode mode = OpenMode.ForRead)
     {
         var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);

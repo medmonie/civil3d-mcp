@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.0
+
+Sheets and AutoCAD set-up: 5 read actions and 21 edit operations (46 / 90 in all), live-tested in Civil 3D 2027 (`tests\run_sheets.bat`, 42 checks, ALL PASS) and type-checked against the 2024 and 2025 APIs.
+
+- **Sheets.** `viewport_create` / `viewport_set` (window fitted or 1:N, named view, twist, lock, layers frozen per viewport), `view_create`, `layout_from_template` (a template layout with its page setup, title block and viewports), `layout_delete`, `page_setup_set` (named page setup, device, paper, plot style, rotation, scale), `title_block_insert`, `block_import`. Every draw operation takes `layout` to draw on paper space. Reads: `list_viewports`, `list_views`.
+- **PDF.** `plot_pdf` plots several layouts into one multi-sheet PDF (`layouts`, or `"all"`) or one PDF per layout (`folder`). Each layout keeps its own paper and scale (switching to the PDF plotter used to fall back to Letter). Layouts are made current before they are plotted, as AutoCAD requires. Mixed paper sizes in one PDF are refused up front with the reason (plot-engine limit).
+- **AutoCAD set-up.** `text_style_create`, `dim_style_create`, `mleader_style_create` (and `style` on text, dimensions and leaders), `linetype_load`, `annotation_scale_add`, `layer_state_save` / `layer_state_restore`, `purge`. Read: `list_cad_styles` (text, dimension, multileader and table styles, linetypes, layer states, annotation scales, page setups).
+- **Xrefs and underlays.** `xref_reload`, `xref_detach`, `xref_bind` (after the commit), `underlay_attach` (PDF page or image). Read: `list_xrefs`.
+- **Blocks.** `dynamic_block_set`; read `get_block_properties` (attributes and dynamic properties).
+- New layouts are created without Civil 3D's automatic viewport and initialised at once, so viewports added in the same batch are real viewports.
+
 ## 0.12.1
 
 Fixes from an external review (ChatGPT/Codex test run), each with an offline regression test in `tests/watergems_test.py`:
