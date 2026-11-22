@@ -42,6 +42,7 @@ internal static class DrawingRead
                 path = doc.Name,
                 readOnly = doc.IsReadOnly,
                 insertionUnits = db.Insunits.ToString(),
+                civilDrawingUnits = Safe(() => Civ.Settings.DrawingSettings.UnitZoneSettings.DrawingUnits.ToString()),
                 currentLayer = Safe(() => ((LayerTableRecord)tr.GetObject(db.Clayer, OpenMode.ForRead)).Name),
                 layerCount,
                 modelSpaceEntityCount = modelSpaceCount,

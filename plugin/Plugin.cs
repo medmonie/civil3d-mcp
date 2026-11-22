@@ -37,7 +37,7 @@ public class Plugin : AcRt.IExtensionApplication
 
 public class Commands
 {
-    /// <summary>Shows the bridge state and makes THIS Civil 3D the one Claude talks to (when several are open).</summary>
+    /// <summary>Shows the bridge state and selects this Civil 3D instance for MCP calls.</summary>
     [AcRt.CommandMethod("MCPSTATUS")]
     public void Status()
     {
@@ -45,12 +45,12 @@ public class Commands
         Plugin.Log(BridgeServer.Describe());
     }
 
-    /// <summary>Allow Claude to edit for the rest of this Civil 3D session without the one-time dialog.</summary>
+    /// <summary>Allow MCP edits in the active drawing without the confirmation dialog.</summary>
     [AcRt.CommandMethod("MCPALLOW")]
     public void Allow()
     {
-        WriteGate.Grant("MCPALLOW command");
-        Plugin.Log("Claude may now edit drawings in this Civil 3D session. Run MCPREVOKE to stop.");
+        WriteGate.Grant(ActiveDoc(), "MCPALLOW command");
+        Plugin.Log("MCP clients may now edit the active drawing. Run MCPREVOKE to stop.");
     }
 
     /// <summary>Withdraw the edit permission; the next edit request asks again.</summary>
@@ -58,6 +58,6 @@ public class Commands
     public void Revoke()
     {
         WriteGate.Revoke("MCPREVOKE command");
-        Plugin.Log("Editing by Claude is switched off. Reading still works.");
+        Plugin.Log("MCP editing is disabled. Reading still works.");
     }
 }

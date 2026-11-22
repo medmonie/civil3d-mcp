@@ -1,6 +1,6 @@
 """End-to-end test of the MCP server WITHOUT Civil 3D.
 
-Starts fake_bridge.py, launches server.py over stdio exactly like Claude does, and exercises the single
+Starts fake_bridge.py, launches server.py over stdio like ChatGPT desktop does, and exercises the single
 `civil3d` tool: reads, QA checks, help, the edit path, the declined-permission path and error handling.
 Also checks that the catalogue matches the plugin sources, that the version numbers agree and that
 docs/ACTIONS.md is current.
@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from uuid import uuid4
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -82,13 +83,29 @@ async def single_tool(bridge_file: Path) -> None:
             print("help ok")
 
             assert (await run(session, "ping"))["editingAllowed"] is False
-            dry = await run(session, "edit", {"dry_run": True, "operations": [{"op": "layer_create", "name": "C-TEST"}]})
+            target = info["target"]
+            await expect_error(session, "edit", {"operations": [{"op": "layer_create", "name": "C-TEST"}]}, "drawing target is required")
+            await expect_error(session, "edit", {"operations": [{"op": "layer_create", "name": "C-TEST"}],
+                                                 "target": {**target, "drawing_id": str(uuid4())}, "request_id": str(uuid4())},
+                               "different from the request target")
+            await expect_error(session, "edit", {"operations": [{"op": "layer_create", "name": "C-TEST"}],
+                                                 "target": {**target, "session_id": str(uuid4())}, "request_id": str(uuid4())},
+                               "session changed")
+            assert (await run(session, "ping"))["editingAllowed"] is False
+            dry = await run(session, "edit", {"target": target, "request_id": info["new_edit_request_id"],
+                                               "dry_run": True, "operations": [{"op": "layer_create", "name": "C-TEST"}]})
             assert dry["applied"] is False and dry["dryRun"] is True, dry
-            done = await run(session, "edit", {"operations": [
+            edit_params = {"target": target, "request_id": str(uuid4()), "operations": [
                 {"op": "pressure_network_create", "name": "W-01", "parts_list": "Water"},
                 {"op": "pressure_add", "network": "W-01",
-                 "pipes": [{"start": [0, 0, 1], "end": [10, 0, 1], "size": 150, "match": "ductile"}]}]})
+                 "pipes": [{"start": [0, 0, 1], "end": [10, 0, 1], "size": 150, "match": "ductile"}]}]}
+            done = await run(session, "edit", edit_params)
             assert done["applied"] is True and done["operations"] == 2, done
+            assert await run(session, "edit", edit_params) == done
+            assert (await run(session, "get_edit_permission"))["appliedEdits"] == 1
+            status = await run(session, "get_edit_status", {"target": target, "request_id": edit_params["request_id"]})
+            assert status["state"] == "completed" and status["applied"] is True, status
+            await expect_error(session, "edit", {**edit_params, "dry_run": True}, "different edit")
             assert (await run(session, "ping"))["editingAllowed"] is True   # granted once, stays granted
             print("edit path ok (permission granted once, then reused)")
 
@@ -106,7 +123,9 @@ async def declined(bridge_file: Path) -> None:
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            res = await run(session, "edit", {"operations": [{"op": "layer_create", "name": "C-TEST"}]})
+            info = await run(session, "get_drawing_info")
+            res = await run(session, "edit", {"operations": [{"op": "layer_create", "name": "C-TEST"}],
+                                               "target": info["target"], "request_id": info["new_edit_request_id"]})
             assert res["applied"] is False and res["permission"] == "not granted", res
             print("declined permission ok: nothing applied")
 
@@ -121,9 +140,34 @@ async def split_tools(bridge_file: Path) -> None:
             assert tools == ["civil3d_edit", "civil3d_read"], tools
             res = await session.call_tool("civil3d_read", {"action": "edit", "params": {"operations": [{"op": "layer_create", "name": "X"}]}})
             assert res.isError, "the read tool must refuse edits"
-            ok = parse(await session.call_tool("civil3d_edit", {"operations": [{"op": "layer_create", "name": "X"}]}))
+            info = parse(await session.call_tool("civil3d_read", {"action": "get_drawing_info"}))
+            ok = parse(await session.call_tool("civil3d_edit", {"operations": [{"op": "layer_create", "name": "X"}],
+                                                               "target": info["target"], "request_id": info["new_edit_request_id"]}))
             assert ok["applied"] is True, ok
             print("split mode ok: civil3d_read refuses edits, civil3d_edit applies them")
+
+
+async def read_only(bridge_file: Path) -> None:
+    params = StdioServerParameters(command=sys.executable, args=[str(SERVER), "--read-only"],
+                                   env={**os.environ, "C3D_BRIDGE_FILE": str(bridge_file), "C3D_MCP_SPLIT": "1"})
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            (tool,) = (await session.list_tools()).tools
+            assert tool.name == "civil3d_read" and tool.annotations.readOnlyHint is True, tool
+            assert "sewergems_check" in tool.description and "sewergems_import" not in tool.description
+            assert parse(await session.call_tool(tool.name, {"action": "ping"}))["editingAllowed"] is False
+            help_data = parse(await session.call_tool(tool.name, {"action": "help"}))
+            assert "edit" not in help_data and "editOperations" not in help_data, help_data.keys()
+            assert "sewergems_import" not in help_data["localActions"]
+            for action, data in (
+                ("edit", {"operations": [{"op": "layer_create", "name": "C-TEST"}]}),
+                ("sewergems_import", {}),
+                ("help", {"topic": "edit"}),
+            ):
+                response = await session.call_tool(tool.name, {"action": action, "params": data})
+                assert response.isError, (action, response)
+            print("read-only mode ok: advertises and accepts reads only, even with split mode requested")
 
 
 def static_checks() -> None:
@@ -171,4 +215,5 @@ if __name__ == "__main__":
     with_fake(single_tool)
     with_fake(declined, FAKE_EDIT="decline")
     with_fake(split_tools)
+    with_fake(read_only)
     print("\nALL OK")

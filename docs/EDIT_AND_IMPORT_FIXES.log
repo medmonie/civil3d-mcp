@@ -1,0 +1,373 @@
+CIVIL 3D MCP EDIT AND SEWERGEMS FIXES
+====================================
+Date 2026-11-21
+Release 0.10.0
+
+Scope
+-----
+This change log covers the three issues selected for the first fix pass.
+It records drawing targeting, edit retries, and SewerGEMS import behavior.
+Paths are relative to the project folder.
+
+01  plugin/Core/DrawingTarget.cs
+--------------------------------
+Added
+  - Per-document UUIDs, bridge session identity, target parsing, and active
+    drawing validation.
+Removed
+  - None.
+Modified
+  - New file.
+Why
+  - Bind a write to the same open drawing across tab switches and distinguish a
+    reopened DWG.
+
+02  plugin/Bridge/BridgeServer.cs
+---------------------------------
+Added
+  - Session IDs in bridge discovery and drawing targets in read responses.
+Removed
+  - The path that sent all actions through the same UI dispatch without checking
+    a target.
+Modified
+  - Routes edits through the request tracker and serves get_edit_status
+    independently of the Civil 3D UI queue.
+Why
+  - Detect a changed bridge instance and allow status checks while an edit is
+    waiting or running.
+
+03  plugin/Bridge/EditRequests.cs
+---------------------------------
+Added
+  - Thread-safe tracking of pending, completed, and error states, payload
+    fingerprints, and bounded caching of recent replies.
+Removed
+  - None.
+Modified
+  - New file.
+Why
+  - Prevent the same request ID from running twice and retain its outcome for
+    safe retry.
+
+04  plugin/Core/Registry.cs
+---------------------------
+Added
+  - Registered get_edit_status as a read action.
+Removed
+  - None.
+Modified
+  - The registry exposes 41 read actions.
+Why
+  - Make edit outcomes discoverable through both desktop clients.
+
+05  plugin/Core/WriteGate.cs
+----------------------------
+Added
+  - Approval and refusal timestamps stored per open drawing.
+Removed
+  - The session-wide approval and cooldown fields.
+Modified
+  - Updated approval, revocation, audit messages, and the late-answer behavior.
+Why
+  - Granting access to one drawing should not grant access to other open
+    drawings.
+
+06  plugin/Plugin.cs
+--------------------
+Added
+  - None.
+Removed
+  - Session-wide wording for MCPALLOW.
+Modified
+  - MCPALLOW now grants permission for the active drawing.
+Why
+  - Make the command match the scope of the edit permission check.
+
+07  plugin/Edit/EditEngine.cs
+-----------------------------
+Added
+  - Target checks before permission, after permission, under the document lock,
+    and before deferred file actions.
+Removed
+  - The old check that only detected a change during the permission dialog.
+Modified
+  - Records request UUIDs in edit audits and reports deferred file-action
+    problems as warnings after commit.
+Why
+  - Keep edits and file actions bound to the requested drawing and give retries
+    a traceable result.
+
+08  plugin/Edit/EditContext.cs
+------------------------------
+Added
+  - A set of resolved object IDs used to deduplicate handles per operation.
+Removed
+  - Repeated processing of the same object when a handle was supplied twice.
+Modified
+  - Resolves the Civil 3D document from the locked database.
+Why
+  - Ensure an object moves or copies once per operation, even when handles are
+    repeated.
+
+09  plugin/Read/DrawingRead.cs
+------------------------------
+Added
+  - The Civil 3D drawing unit value in get_drawing_info.
+Removed
+  - None.
+Modified
+  - Drawing info reports drawing units as well as AutoCAD insertion units.
+Why
+  - Allow the importer to verify the drawing uses metres before using metric
+    elevations and coordinates.
+
+10  plugin/Edit/GravityOps.cs
+-----------------------------
+Added
+  - Named pipe endpoints, connection verification, and optional metric bore and
+    invert verification.
+Removed
+  - Automatic selection of the first candidate when several structures fell
+    inside the tolerance.
+Modified
+  - Indexes structures by name and reports ambiguous geometric connections.
+Why
+  - Preserve the intended network topology and reject a pipe that Civil 3D
+    cannot place at the requested levels.
+
+11  plugin/Edit/AlignmentOps.cs
+-------------------------------
+Added
+  - Optional filters for gravity pipe and structure names when adding parts to a
+    profile view.
+Removed
+  - Repeated profile attachment attempts for the same resolved object.
+Modified
+  - Uses named parts from the newly created network within the import
+    transaction.
+Why
+  - Build each profile with its own parts before committing the core import.
+
+12  plugin/Edit/DrawOps.cs
+--------------------------
+Added
+  - The draw_annotations operation for grouped line, text, and multiline-text
+    items.
+Removed
+  - None.
+Modified
+  - The edit registry exposes 69 operations.
+Why
+  - Keep a band table with hundreds of annotations within the 500-operation edit
+    batch limit.
+
+13  server/bridge_client.py
+---------------------------
+Added
+  - UUID and target validation, selected-session matching, and a fresh request
+    UUID on get_drawing_info.
+Removed
+  - The generic timeout advice to check a permission prompt before resending.
+Modified
+  - Verifies reply IDs, closes the reply stream explicitly, and points
+    interrupted writes to get_edit_status.
+Why
+  - Fail safely with an old or different add-in and let the caller recover the
+    original outcome.
+
+14  server/server.py
+--------------------
+Added
+  - Required target and request ID inputs on the split edit tool.
+Removed
+  - The split edit call that accepted operations without a drawing target.
+Modified
+  - Passes the target and request ID through the existing edit dispatcher.
+Why
+  - Apply the same drawing and retry rules to standard and split tool modes.
+
+15  server/sewergems.py
+-----------------------
+Added
+  - Flow validation, metric checks, unique branch names, strict catalogue
+    matching, explicit endpoints, and separate finish attempt IDs.
+Removed
+  - Recursive upstream traversal, catalogue downsizing fallback, and unreported
+    failures in later import batches.
+Modified
+  - Uses one core transaction for network, profiles, and styles. Groups view
+    placement and bands in a recorded finishing transaction.
+Why
+  - Reject malformed networks before writing and recover finishing without
+    rebuilding a committed network.
+
+16  server/catalog.py
+---------------------
+Added
+  - Documentation for required target and request IDs, status lookup, named
+    endpoints, grouped annotations, and finish_attempt.
+Removed
+  - The description of approval for every drawing in the session and the
+    network-only import dry run.
+Modified
+  - Updates the standard and split tool descriptions and SewerGEMS options.
+Why
+  - Tell the MCP client how to prepare a safe edit and recover a result after an
+    interruption.
+
+17  plugin/BridgeInfo.cs
+------------------------
+Added
+  - None.
+Removed
+  - Version 0.9.0 from the new build.
+Modified
+  - Set the bridge version to 0.10.0.
+Why
+  - Identify the build with the new write request contract.
+
+18  plugin/PackageContents.xml
+------------------------------
+Added
+  - None.
+Removed
+  - The previous bundle version and permission description from the new
+    manifest.
+Modified
+  - Set the version to 0.10.0 and describe drawing-scoped approval.
+Why
+  - Keep the Autodesk bundle identifier and build version in sync.
+
+19  README.md
+-------------
+Added
+  - Instructions for drawing targets, request status, metric imports, and
+    finishing retries.
+Removed
+  - The session-wide edit approval description and unconditional atomicity
+    claims.
+Modified
+  - Updated version, tool counts, examples, command behavior, and import stages.
+Why
+  - Explain the current edit contract and the boundary between drawing
+    transactions and deferred file operations.
+
+20  package/INSTALL.txt
+-----------------------
+Added
+  - None.
+Removed
+  - The approval description that applied to every drawing in a session.
+Modified
+  - Updated the quick guide to describe per-drawing approval.
+Why
+  - Keep the packaged setup guide consistent with Civil 3D.
+
+21  CHANGELOG.md
+----------------
+Added
+  - A 0.10.0 release entry.
+Removed
+  - None.
+Modified
+  - Records drawing targeting, retry handling, and import changes.
+Why
+  - Provide a release-level summary alongside this file-by-file record.
+
+22  docs/ACTIONS.md
+-------------------
+Added
+  - Generated reference entries for the new inputs, status action, and
+    annotation operation.
+Removed
+  - Superseded action and permission descriptions.
+Modified
+  - Regenerated from server/catalog.py.
+Why
+  - Keep the parameter reference aligned with the server and plugin.
+
+23  tests/fake_bridge.py
+------------------------
+Added
+  - Fake drawing and session IDs, cached edit outcomes, and status replies.
+Removed
+  - The fake edit path that accepted an untargeted call.
+Modified
+  - Matches the new response envelope and edit identity checks.
+Why
+  - Exercise client workflows without changing a Civil 3D drawing.
+
+24  tests/smoke_test.py
+-----------------------
+Added
+  - Missing, stale session, wrong drawing, duplicate request, and status checks.
+Removed
+  - The test setup that submitted edits without an identity.
+Modified
+  - Supplies drawing targets and request UUIDs through the standard and split
+    tools.
+Why
+  - Catch regressions in the new edit contract.
+
+25  tests/live_edit.py
+----------------------
+Added
+  - Capture of the inspected drawing target and unique IDs for live edits.
+Removed
+  - The untargeted live edit calls.
+Modified
+  - Uses the target for live tests and returns a failing process exit code on
+    failure.
+Why
+  - Prevent an open-drawing switch from redirecting the test suite.
+
+26  tests/sewergems_live.py
+---------------------------
+Added
+  - Use of the target and request UUID from get_drawing_info.
+Removed
+  - The untargeted live import call.
+Modified
+  - Stops early on a failed import and returns a failing process exit code.
+Why
+  - Keep live validation on its selected scratch drawing and expose failures to
+    the runner.
+
+27  tests/sewergems_test.py
+---------------------------
+Added
+  - Seven offline regression tests for units, topology, naming, sizing, band
+    batching, and finishing retry.
+Removed
+  - None.
+Modified
+  - New file.
+Why
+  - Cover the specific SewerGEMS defects found in the review.
+
+28  dist/C3dMcp-2027-0.10.0.zip
+-------------------------------
+Added
+  - A versioned installer with the rebuilt server, Civil 3D 2027 add-in,
+    installer scripts, and guides.
+Removed
+  - Temporary staging files used for building and packaging.
+Modified
+  - New release archive.
+Why
+  - Deliver the updated add-in and MCP server together while leaving the running
+    0.9.0 session in place.
+
+Verification
+------------
+  - Built the Civil 3D 2027 add-in with zero warnings and zero errors.
+  - Passed the standard, split, and read-only MCP smoke suite.
+  - Compiled and tested the C# request tracker with a concurrent duplicate,
+    completed replay, changed payload, mismatched drawing, and recorded error.
+  - Passed seven offline SewerGEMS regressions. The supplied export with 50
+    manholes and 50 conduits passed validation.
+  - Verified the archive contents against the build inputs and tested the ZIP's
+    packaged server against a temporary bridge.
+  - The live Civil 3D session was running 0.9.0 with a project drawing open.
+    The 0.10.0 edits and SewerGEMS drawing creation require live verification
+    on a scratch drawing with the updated add-in and server.

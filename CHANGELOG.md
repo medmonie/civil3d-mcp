@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0
+
+- Bound edits and approval to a specific open drawing. Write calls now require the drawing `target` and a `request_id` UUID from `get_drawing_info`.
+- Added `get_edit_status` and same-request deduplication for interrupted calls. Repeated handles in one edit operation are resolved once per object.
+- Validated SewerGEMS labels, flow paths, metric units, and catalogue sizes before writing. The import verifies pipe connections, bore, and inverts.
+- Created the SewerGEMS network, profile objects, and styles in a shared transaction. Profile placement and band tables use a separately tracked edit with grouped line and text annotations.
+
 ## 0.9.0
 - Import from Bentley SewerGEMS: `sewergems_check` (validate the export, nothing drawn) and `sewergems_import` (gravity network with SewerGEMS names and inverts, one alignment + ground profile + profile view per line). Reads the full-output workbook or FlexTable CSVs, honours `Is Reversed?`, maps the true bore to the catalogue size, optional rename table.
 - Presentation for the import: plan styles and labels (flow arrow, `ø200 L=22m`, manhole names), alignments without labels on a layer that is off, *Profile View* style, and a LISP-style band table under every profile view (ground, invert with drops, depth, distance, slope ‰, diameter, material).

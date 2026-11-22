@@ -9,11 +9,13 @@ import json
 import re
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "server"))
 from bridge_client import EDIT_TIMEOUT, call  # noqa: E402
 
 RESULTS = {}
+TARGET = None
 
 
 def show(title, out):
@@ -24,7 +26,7 @@ def show(title, out):
 
 def read(method, params=None):
     try:
-        return show(method, call(method, params or {}))
+        return show(method, call(method, {**(params or {}), **({"target": TARGET} if TARGET else {})}))
     except Exception as exc:
         print(f"===== {method}\nFAILED: {exc}", flush=True)
         return None
@@ -33,7 +35,7 @@ def read(method, params=None):
 def edit(title, ops, dry_run=False, expect=True):
     """expect: True = must apply, False = must be rejected/rolled back."""
     try:
-        out = call("edit", {"operations": ops, "dry_run": dry_run}, timeout=EDIT_TIMEOUT)
+        out = call("edit", {"operations": ops, "dry_run": dry_run, "target": TARGET, "request_id": str(uuid4())}, timeout=EDIT_TIMEOUT)
     except Exception as exc:
         out = {"applied": False, "exception": str(exc)}
     show(("DRY " if dry_run else "") + "edit: " + title, out)
@@ -381,6 +383,9 @@ if __name__ == "__main__":
     if not (re.fullmatch(r"Drawing\d+\.dwg", name, re.IGNORECASE) or "mcp_test" in name.lower()):
         raise SystemExit(f"Refusing to run: the active drawing '{name}' is not a scratch drawing "
                          "(needs an unsaved DrawingN.dwg or a name containing 'mcp_test').")
+    TARGET = info.get("target")
+    if not TARGET:
+        raise SystemExit("Update the loaded bridge before running the edit tests.")
     read("get_edit_permission")
     wanted = sys.argv[1:] or [s for s in STAGES if s != "cleanup"]   # 'acad' needs the alignment stage for its last check only
     for stage in wanted:
@@ -395,3 +400,4 @@ if __name__ == "__main__":
     for k, v in RESULTS.items():
         print(f"{v:5} {k}")
     print("ALL PASS" if all(v == "PASS" for v in RESULTS.values()) else "SOME FAILED")
+    sys.exit(int(any(v != "PASS" for v in RESULTS.values())))

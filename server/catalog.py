@@ -27,7 +27,7 @@ STYLE_KINDS = ("alignment | alignment_label_set | profile | profile_label_set | 
 READ_GROUPS: dict[str, Group] = {
     "Drawing (AutoCAD)": {
         "ping": ("Connection check: bridge version, Civil 3D version, active drawing, whether editing is allowed.", {}),
-        "get_drawing_info": ("Active drawing: path, units, current layer, layer/entity counts, counts of Civil 3D objects.", {}),
+        "get_drawing_info": ("Active drawing: path, units, object counts, the drawing target, and a fresh edit request UUID.", {}),
         "list_layers": ("Layers with on/frozen/locked/plot state, colour and xref flag.", {"limit?": "default 500"}),
         "count_entities": ("Count model-space entities by DXF type or by layer.",
                            {"group_by?": "'type' (default) or 'layer'", "layer?": "only this layer"}),
@@ -90,7 +90,9 @@ READ_GROUPS: dict[str, Group] = {
                       {"kind": "a list_styles kind", "name": ""}),
         "describe_api": ("Developer aid: public members of an Autodesk.* .NET type loaded in Civil 3D.",
                          {"type_name": "full type name", "contains?": "member name filter", "limit?": "default 300"}),
-        "get_edit_permission": ("Whether editing is currently allowed in this Civil 3D session, and how to allow it.", {}),
+        "get_edit_permission": ("Whether editing is currently allowed in the active drawing, and how to allow it.", {}),
+        "get_edit_status": ("Find an edit by request UUID. Check this after a timeout before retrying. Status remains available while Civil 3D is busy.",
+                            {"target": "original drawing target", "request_id": "original edit UUID"}),
         "list_actions": ("What the installed plugin supports (names only). Use 'help' for descriptions.", {}),
     },
 }
@@ -114,22 +116,26 @@ LOCAL_ACTIONS: Group = {
                          "rename table, pipes at the SewerGEMS inverts), then per line an alignment from the downstream end, a ground "
                          "profile through the manhole rims and a profile view with that line's parts. Needs edit permission; stops "
                          "without drawing if sewergems_check reports problems.",
-                         {**SEWERGEMS_INPUT, "network?": "default 'Sewer'", "parts_list?": "default 'Sanitary Sewer'",
+                          {**SEWERGEMS_INPUT, "target": "from get_drawing_info", "request_id": "one UUID for the import", "network?": "default 'Sewer'", "parts_list?": "default 'Sanitary Sewer'",
                           "pipe_family?": "words of the pipe family, default 'PVC'",
                           "structure_family?": "default 'Cylindrical Junction Structure NF SI' (flat top, fits 1.2 m deep manholes); added to the parts list if missing",
                           "structure_diameter?": "mm, default 1200", "profile_views_at?": "[x,y] top-left of the first view, default 50 below the network",
                           "profile_view_gap?": "vertical gap between views, default 30",
                           "presentation?": "false to skip styling; or overrides of: pipe_style, structure_style, structure_label_style, "
-                          "pipe_label_style, pipe_label_text, label_height_mm, alignment_label_set, profile_view_style, bands", "profile_view_style?": "", "dry_run?": "check the network batch only"}),
+                           "pipe_label_style, pipe_label_text, label_height_mm, alignment_label_set, profile_view_style, band_table",
+                           "profile_view_style?": "overrides the presentation setting", "dry_run?": "validate the core network, profiles, and styles transaction",
+                           "finish_attempt?": "default 1. Increment only after the preceding finishing transaction is confirmed rolled back."}),
 }
 
 # --------------------------------------------------------------------------- edit operations (inside action 'edit')
 
 EDIT_ACTION = (
-    "Change the drawing. params = {operations: [ {op: <name>, ...}, ... ], dry_run?: bool}. The whole list is ONE "
-    "transaction and one undo step: if any operation fails nothing is changed. dry_run runs everything and rolls it "
-    "back, so use it to validate a large batch first. Editing needs a ONE-TIME permission per Civil 3D session: on the "
-    "first edit a Yes/No dialog appears in Civil 3D (or the user runs MCPALLOW); after that no edit asks again."
+    "Run a batch of operations on a specific open drawing. First call get_drawing_info and verify the drawing name. "
+    "Pass its target and new_edit_request_id as target and request_id. Use the target from the reads used to prepare this edit. "
+    "A changed session or active drawing stops the edit. The drawing operations share one transaction. "
+    "dry_run aborts that transaction after validation. File outputs run after commit. Editing requires permission for the "
+    "target drawing. If the response is interrupted, check get_edit_status with the original target and request_id; "
+    "resend only with the same parameters and request ID for a retry."
 )
 
 LAYER_PROPS = {"color?": ACI, "on?": "", "frozen?": "", "locked?": "", "plot?": ""}
@@ -163,6 +169,8 @@ EDIT_GROUPS: dict[str, Group] = {
         "draw_text": ("Draw single-line text.", {"text": "", "at": XYZ, "height?": "default 2.5", "rotation_deg?": "", **ON_LAYER}),
         "draw_mtext": ("Draw multiline text (\\P starts a new line).",
                        {"text": "", "at": XYZ, "height?": "default 2.5", "width?": "wrap width", "rotation_deg?": "", **ON_LAYER}),
+        "draw_annotations": ("Draw up to 5,000 line and text items inside one edit operation.",
+                             {"items": "[{op: draw_line | draw_text | draw_mtext, ...}, ...]"}),
         "draw_hatch": ("Hatch a closed boundary given by its corner points.",
                        {"points": "[[x,y], ...]", "pattern?": "SOLID (default), ANSI31, AR-CONC, ...", "scale?": "",
                         "keep_boundary?": "default true (associative hatch)", **ON_LAYER}),
@@ -227,7 +235,8 @@ EDIT_GROUPS: dict[str, Group] = {
         "profile_view_create": ("Create a profile view of an alignment (shows all its profiles).",
                                 {"alignment": "", "at": "[x,y] lower-left insertion point", "name?": "", "style?": "", "band_set?": ""}),
         "profile_view_add_parts": ("Show network parts in a profile view.",
-                                   {"profile_view": "", "pipe_network?": "gravity network name", "pressure_network?": "", "handles?": "individual parts"}),
+                                   {"profile_view": "", "pipe_network?": "gravity network name", "pressure_network?": "", "handles?": "individual parts",
+                                    "pipe_names?": "filter gravity pipes by name", "structure_names?": "filter gravity structures by name"}),
         "sample_lines_create": ("Create sample lines on an alignment (the group is created if missing).",
                                 {"alignment": "", "group": "", "stations?": "[station, ...]", "interval?": "every N along the alignment",
                                  "prefix?": "default 'SL-'"}),
@@ -275,9 +284,9 @@ EDIT_GROUPS: dict[str, Group] = {
         "pipe_network_create": ("Create an empty gravity pipe network.", {"name": "", "parts_list?": "name or handle", **NETWORK_PROPS}),
         "pipe_network_add": ("Add structures and straight pipes to a gravity network. A part is chosen by 'family' (words contained in "
                              "the family description) plus 'inner_diameter' (units as shown by list_gravity_parts) or 'size_index'. "
-                             "Pipes connect to structures at their end points.",
+                             "Name endpoint structures for strict connections. Geometric matching skips ambiguous endpoints and reports them.",
                              {"network": "", "structures?": "[{id?, name?, description?, at:[x,y,z], family, inner_diameter? | size_index?, rotation_deg?, rim?, sump?}, ...]",
-                              "pipes?": "[{id?, name?, description?, start:[x,y,z], end:[x,y,z] (centreline points), family, inner_diameter? | size_index?}, ...]",
+                              "pipes?": "[{id?, name?, description?, start:[x,y,z], end:[x,y,z] (centreline points), family, inner_diameter? | size_index?, start_structure?, end_structure?, verify_bore_mm? (metric drawings)}, ...]",
                               "parts_list?": "default: the network's", "apply_rules?": "default false", "connect_tolerance?": "default 0.01"}),
         "pipe_set": ("Change one gravity pipe.",
                      {"handle": "", "start?": XYZ, "end?": XYZ,
@@ -331,7 +340,8 @@ EDIT_OPS: Group = _flatten(EDIT_GROUPS)
 
 # --------------------------------------------------------------------------- rendering
 
-EDIT_PARAMS = {"operations": "list of edit operations", "dry_run?": "bool"}
+EDIT_PARAMS = {"operations": "list of edit operations", "target": "drawing target from get_drawing_info",
+               "request_id": "unique edit UUID", "dry_run?": "bool"}
 
 
 def _signatures(groups: dict[str, Group]) -> list[str]:
@@ -345,7 +355,7 @@ def _signatures(groups: dict[str, Group]) -> list[str]:
 
 
 def tool_description(mode: str = "all") -> str:
-    """Text Claude sees for the MCP tool. mode: 'all', 'read' or 'edit'."""
+    """Description advertised to MCP clients. Mode is 'all', 'read' or 'edit'."""
     out: list[str] = []
     if mode in ("all", "read"):
         out.append("Work with the drawing open in Autodesk Civil 3D on this computer. Call with action=<name> and params={...}. "
@@ -353,9 +363,10 @@ def tool_description(mode: str = "all") -> str:
                    "parameter description.")
         out.append("\nREAD ACTIONS")
         out += _signatures(READ_GROUPS)
-        out += _signatures({"QA / help / import": LOCAL_ACTIONS})
+        local = LOCAL_ACTIONS if mode == "all" else {k: v for k, v in LOCAL_ACTIONS.items() if k != "sewergems_import"}
+        out += _signatures({"QA / help": local})
     if mode in ("all", "edit"):
-        out.append("\nEDIT ACTION\n- edit(operations, dry_run?): " + EDIT_ACTION)
+        out.append("\nEDIT ACTION\n- edit(operations, target, request_id, dry_run?): " + EDIT_ACTION)
         out.append("\nEDIT OPERATIONS (each is {op: name, ...})")
         out += _signatures(EDIT_GROUPS)
         out.append("\nCoordinates are drawing units (easting, northing, elevation). Objects are addressed by name, parts and "
@@ -364,17 +375,24 @@ def tool_description(mode: str = "all") -> str:
     return "\n".join(out)
 
 
-def help_data(topic: str | None = None) -> dict:
+def help_data(topic: str | None = None, *, include_edits: bool = True) -> dict:
     def full(entries: Group) -> dict:
         return {name: {"summary": summary, "params": params} for name, (summary, params) in entries.items()}
 
+    local = LOCAL_ACTIONS if include_edits else {k: v for k, v in LOCAL_ACTIONS.items() if k != "sewergems_import"}
+    entries = ((READ_ACTIONS, "action"), (local, "action"))
     edit = {"summary": EDIT_ACTION, "params": EDIT_PARAMS}
     if topic is None:
-        return {"readActions": full(READ_ACTIONS), "localActions": full(LOCAL_ACTIONS), "edit": edit, "editOperations": full(EDIT_OPS)}
-    if topic == "edit":
+        data = {"readActions": full(READ_ACTIONS), "localActions": full(local)}
+        if include_edits:
+            data.update(edit=edit, editOperations=full(EDIT_OPS))
+        return data
+    if include_edits and topic == "edit":
         return {"edit": {**edit, "operations": full(EDIT_OPS)}}
-    for entries, kind in ((READ_ACTIONS, "action"), (LOCAL_ACTIONS, "action"), (EDIT_OPS, "edit operation (use inside action 'edit')")):
-        if topic in entries:
-            summary, params = entries[topic]
+    if include_edits:
+        entries += ((EDIT_OPS, "edit operation (use inside action 'edit')"),)
+    for group, kind in entries:
+        if topic in group:
+            summary, params = group[topic]
             return {topic: {"summary": summary, "params": params, "kind": kind}}
     raise ValueError(f"Unknown help topic '{topic}'.")

@@ -13,6 +13,7 @@ import os
 import secrets
 import socketserver
 import sys
+from uuid import uuid4
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "server"))
@@ -20,6 +21,8 @@ import catalog  # noqa: E402
 
 TOKEN = secrets.token_hex(16)
 STATE = {"editingAllowed": False, "edits": 0}
+TARGET = {"session_id": str(uuid4()), "drawing_id": str(uuid4())}
+EDIT_REQUESTS: dict[str, tuple[dict, dict]] = {}
 
 LAYERS = [
     {"name": "0", "on": True, "frozen": False, "locked": False, "plot": True, "color": "7", "xref": False},
@@ -77,7 +80,7 @@ def handle(method: str, params: dict):
                 "activeDrawing": r"C:\Projects\demo\DEMO.dwg", "editingAllowed": STATE["editingAllowed"]}
     if method == "get_drawing_info":
         return {"name": "DEMO.dwg", "path": r"C:\Projects\demo\DEMO.dwg", "readOnly": False,
-                "insertionUnits": "Meters", "layerCount": len(LAYERS), "modelSpaceEntityCount": 1234,
+                "insertionUnits": "Meters", "civilDrawingUnits": "Meters", "layerCount": len(LAYERS), "modelSpaceEntityCount": 1234,
                 "civil": {"surfaces": len(SURFACES), "alignments": len(ALIGNMENTS),
                           "pipeNetworks": len(NETWORKS), "sites": 0}}
     if method == "list_layers":
@@ -135,21 +138,38 @@ def handle(method: str, params: dict):
                 "actions": [{"name": n, "kind": "read"} for n in catalog.READ_ACTIONS] + [{"name": "edit", "kind": "write"}],
                 "editOperations": sorted(catalog.EDIT_OPS), "editPermission": {"editingAllowed": STATE["editingAllowed"]}}
     if method == "get_edit_permission":
-        return {"editingAllowed": STATE["editingAllowed"]}
+        return {"editingAllowed": STATE["editingAllowed"], "appliedEdits": STATE["edits"]}
+    if method == "get_edit_status":
+        request_id = params["request_id"]
+        entry = EDIT_REQUESTS.get(request_id)
+        if entry is None:
+            return {"request_id": request_id, "state": "unknown"}
+        result = entry[1]
+        return {"request_id": request_id, "state": "completed", "applied": result["applied"], "result": result}
     if method == "edit":
+        request_id = params["request_id"]
+        if request_id in EDIT_REQUESTS:
+            previous, result = EDIT_REQUESTS[request_id]
+            if previous != params:
+                raise ValueError("This request_id already identifies a different edit.")
+            return result
         ops = params.get("operations") or []
         for i, op in enumerate(ops, 1):
             if op.get("op") not in catalog.EDIT_OPS:
                 raise ValueError(f"operation {i}: unknown op '{op.get('op')}'")
         if not STATE["editingAllowed"]:
             if os.environ.get("FAKE_EDIT", "allow") != "allow":
-                return {"applied": False, "permission": "not granted", "reason": "The user declined editing in Civil 3D. Nothing was changed."}
+                result = {"applied": False, "permission": "not granted", "reason": "The user declined editing in Civil 3D."}
+                EDIT_REQUESTS[request_id] = params, result
+                return result
             STATE["editingAllowed"] = True   # the one-time dialog answered Yes
         dry = bool(params.get("dry_run"))
         if not dry:
             STATE["edits"] += 1
-        return {"applied": not dry, "dryRun": dry, "operations": len(ops), "warnings": [],
-                "results": [{"index": i, "op": op["op"], "result": {}} for i, op in enumerate(ops, 1)]}
+        result = {"applied": not dry, "dryRun": dry, "operations": len(ops), "warnings": [],
+                  "results": [{"index": i, "op": op["op"], "result": {}} for i, op in enumerate(ops, 1)]}
+        EDIT_REQUESTS[request_id] = params, result
+        return result
     if method in catalog.READ_ACTIONS:
         return {"note": f"fake bridge has no canned data for {method}"}
     raise ValueError(f"unknown method '{method}'")
@@ -164,8 +184,12 @@ class Handler(socketserver.StreamRequestHandler):
                 reply = {"id": req.get("id"), "ok": False, "error": "unauthorized"}
             else:
                 try:
+                    method, params = req.get("method", ""), req.get("params") or {}
+                    if (method in ("edit", "get_edit_status") or "target" in params) and params.get("target") != TARGET:
+                        raise ValueError("The active drawing is different from the request target.")
                     reply = {"id": req.get("id"), "ok": True,
-                             "result": handle(req.get("method", ""), req.get("params") or {})}
+                             "result": handle(method, params),
+                             "target": TARGET if method not in ("edit", "get_edit_status") else None}
                 except Exception as exc:  # mirror the plugin: errors go back as ok=false
                     reply = {"id": req.get("id"), "ok": False, "error": f"{type(exc).__name__}: {exc}"}
             self.wfile.write((json.dumps(reply) + "\n").encode("utf-8"))
@@ -181,7 +205,8 @@ def main() -> None:
     with Server(("127.0.0.1", 0), Handler) as srv:
         port = srv.server_address[1]
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps({"port": port, "token": TOKEN, "pid": os.getpid()}), encoding="utf-8")
+        target.write_text(json.dumps({"port": port, "token": TOKEN, "pid": os.getpid(),
+                                      "session_id": TARGET["session_id"]}), encoding="utf-8")
         print(f"fake bridge on 127.0.0.1:{port}, connection file {target}", flush=True)
         try:
             srv.serve_forever()

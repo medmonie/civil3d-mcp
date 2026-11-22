@@ -1,14 +1,11 @@
 """Bentley SewerGEMS -> Civil 3D gravity network, alignments and profile views.
 
 Input: the SewerGEMS export as one Excel workbook (sheets "Manhole", "Outfall", "Conduit" - the "full output"), or
-two CSV FlexTable exports (manholes, conduits). Columns are matched by name with the units stripped, so
-"Elevation (Ground) (m)" and "Elevation (Ground)" are the same column.
+CSV FlexTable exports with manholes, outfalls, and conduits. Geometry must use metres and diameters millimetres.
 
-    check(...)   reads and validates; nothing is drawn. Returns the lines, the parts it would use and any problems.
-    build(...)   check, then draws in two edit batches:
-                   1. the pipe network (manholes named after SewerGEMS, pipes with SewerGEMS inverts),
-                   2. per line: an alignment from the downstream end, a ground profile through the manhole rims,
-                      a profile view showing that line's pipes and manholes.
+    check(...)   validates the export and returns the proposed lines and any problems.
+    build(...)   creates the network, profiles, and styles in one edit, then positions views and draws band tables
+                 in a separately tracked edit.
 
 Levels: a Civil 3D pipe is placed by its centreline, so each end is put at invert + inner diameter / 2. The pipe
 then reports exactly the SewerGEMS invert. Manholes get rim = ground level and sump = their invert; the default
@@ -18,25 +15,47 @@ whose levels Civil 3D still changed is listed in the reply (levelMismatches).
 from __future__ import annotations
 
 import csv
+import json
 import math
 import re
-from collections import Counter
+from collections import Counter, deque
 from pathlib import Path
 from typing import Any
+from uuid import UUID, uuid5
 
-from bridge_client import EDIT_TIMEOUT, call
+from bridge_client import EDIT_TIMEOUT, BridgeError, DrawingTarget, call, drawing_target, edit_request_id
 
 INVERT_TOLERANCE = 0.005      # m; level differences below this are rounding, not drops or reversals
 LENGTH_TOLERANCE = 0.05       # m; table length vs plan distance
+MAX_BATCH_OPERATIONS = 500
 
 # --------------------------------------------------------------------------- reading
 
 
-def _key(header: Any) -> str:
-    """'Elevation (Ground) (m)' -> 'elevation (ground)'; units in the last brackets are dropped."""
-    text = str(header or "").strip().lstrip("﻿")
-    text = re.sub(r"\s*\((m|mm|m/m|m/km|%|ft|in|m/s|l/s|m³/s)\)$", "", text, flags=re.I)
-    return text.lower()
+_UNITS = re.compile(r"\s*\((m|mm|m/m|m/km|%|ft|in|m/s|l/s|m³/s)\)$", re.I)
+_METRIC_COLUMNS = {
+    "x": "m", "y": "m", "elevation (ground)": "m", "elevation (rim)": "m", "elevation (invert)": "m",
+    "invert (start)": "m", "invert (stop)": "m", "diameter": "mm", "length (scaled)": "m",
+    "length (unified)": "m", "length": "m", "slope (calculated)": "m/km",
+}
+_USED_COLUMNS = _METRIC_COLUMNS.keys() | {"label", "material", "start node", "stop node", "is active?", "is reversed?"}
+
+
+def _keys(headers: Any, source: str) -> list[str]:
+    keys: list[str] = []
+    used: set[str] = set()
+    for header in headers:
+        text = str(header or "").strip().lstrip("\ufeff").lower()
+        units = _UNITS.search(text)
+        key = text[:units.start()] if units else text
+        expected = _METRIC_COLUMNS.get(key)
+        if units and expected and units[1] != expected:
+            raise ValueError(f"{source}: '{header}' must use {expected}. Export in metric units (m, mm, m/km).")
+        if key in _USED_COLUMNS and key in used:
+            raise ValueError(f"{source}: duplicate column '{key}'.")
+        keys.append(key)
+        used.add(key)
+    return keys
 
 
 def _num(value: Any) -> float | None:
@@ -59,7 +78,7 @@ def _rows_xlsx(path: Path, sheet: str) -> list[dict[str, Any]]:
         book.close()
     if not rows:
         return []
-    keys = [_key(h) for h in rows[0]]
+    keys = _keys(rows[0], sheet)
     return [dict(zip(keys, r)) for r in rows[1:] if any(v not in (None, "") for v in r)]
 
 
@@ -67,7 +86,7 @@ def _rows_csv(path: Path) -> list[dict[str, Any]]:
     with open(path, encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f)
         header = next(reader, [])
-        keys = [_key(h) for h in header]
+        keys = _keys(header, path.name)
         return [dict(zip(keys, r)) for r in reader if any(c.strip() for c in r)]
 
 
@@ -106,6 +125,7 @@ def read(params: dict[str, Any]) -> dict[str, Any]:
         source = f"{params['manholes_csv']} + {params['conduits_csv']}"
 
     nodes: dict[str, dict[str, Any]] = {}
+    node_labels: set[str] = set()
     for kind, rows in (("manhole", manholes), ("outfall", outfalls)):
         for r in rows:
             if not _active(r):
@@ -120,12 +140,16 @@ def read(params: dict[str, Any]) -> dict[str, Any]:
             }
             if not label:
                 raise ValueError(f"A {kind} row has no Label.")
+            if label.casefold() in node_labels:
+                raise ValueError(f"Duplicate manhole or outfall label '{label}'.")
             if node["x"] is None or node["y"] is None:
                 raise ValueError(f"{kind} {label} has no X / Y. Export the FlexTable with the X and Y columns, "
                                  "or use the full-output workbook.")
             nodes[label] = node
+            node_labels.add(label.casefold())
 
     pipes: list[dict[str, Any]] = []
+    pipe_labels: set[str] = set()
     for r in conduits:
         if not _active(r):
             continue
@@ -137,6 +161,10 @@ def read(params: dict[str, Any]) -> dict[str, Any]:
             "length": _num(_pick(r, "length (scaled)", "length (unified)", "length")),
             "slope_permille": _num(_pick(r, "slope (calculated)")),   # SewerGEMS reports it in m/km = per mille
         }
+        label = pipe["label"]
+        if not label or label.casefold() in pipe_labels:
+            raise ValueError(f"Conduit labels must be present and unique. Duplicate or empty label '{label}'.")
+        pipe_labels.add(label.casefold())
         # SewerGEMS keeps the drawn direction and flags "Is Reversed?" when flow runs stop -> start.
         if str(_pick(r, "is reversed?")).lower() == "true":
             pipe["start"], pipe["stop"] = pipe["stop"], pipe["start"]
@@ -153,7 +181,10 @@ def read_rename(path_text: str | None) -> dict[str, str]:
     with open(_need_path(path_text, "rename_csv"), encoding="utf-8-sig", newline="") as f:
         for row in csv.reader(f):
             if len(row) >= 2 and row[0].strip() and row[1].strip():
-                rename[row[0].strip()] = row[1].strip()
+                label = row[0].strip()
+                if label in rename:
+                    raise ValueError(f"Rename CSV repeats the source label '{label}'.")
+                rename[label] = row[1].strip()
     return rename
 
 
@@ -170,8 +201,8 @@ def validate(nodes: dict[str, Any], pipes: list[dict[str, Any]]) -> list[str]:
             problems.append(f"{p['label']}: missing invert(s)")
         elif p["inv_stop"] > p["inv_start"] + INVERT_TOLERANCE:
             problems.append(f"{p['label']}: flows uphill ({p['inv_start']} -> {p['inv_stop']})")
-        if p["diameter_mm"] is None:
-            problems.append(f"{p['label']}: no diameter")
+        if p["diameter_mm"] is None or p["diameter_mm"] <= 0:
+            problems.append(f"{p['label']}: diameter must be positive")
         a, b = nodes.get(p["start"]), nodes.get(p["stop"])
         if a and b:
             plan = math.hypot(a["x"] - b["x"], a["y"] - b["y"])
@@ -195,8 +226,24 @@ def validate(nodes: dict[str, Any], pipes: list[dict[str, Any]]) -> list[str]:
             problems.append(f"{label}: {outgoing[label]} outgoing pipes (a sewer manhole should have one)")
         elif outgoing[label] == 0 and node["kind"] != "outfall":
             problems.append(f"{label}: no outgoing pipe and not an outfall")
+        if node["kind"] == "outfall" and outgoing[label] > 0:
+            problems.append(f"{label}: an outfall must be the end of a flow path")
     if not any(n["kind"] == "outfall" for n in nodes.values()):
         problems.append("no outfall in the export")
+    if not problems:
+        upstream: dict[str, list[str]] = {}
+        for p in pipes:
+            upstream.setdefault(p["stop"], []).append(p["start"])
+        reachable = {k for k, n in nodes.items() if n["kind"] == "outfall"}
+        frontier = deque(reachable)
+        while frontier:
+            for label in upstream.get(frontier.popleft(), []):
+                if label not in reachable:
+                    reachable.add(label)
+                    frontier.append(label)
+        missing = sorted(nodes.keys() - reachable)
+        if missing:
+            problems.append(f"{len(missing)} nodes do not drain to an outfall (disconnected flow or cycle): {', '.join(missing[:20])}")
     return problems
 
 
@@ -210,23 +257,33 @@ def split_lines(nodes: dict[str, Any], pipes: list[dict[str, Any]], rename: dict
     arriving: dict[str, list[dict[str, Any]]] = {}
     for p in pipes:
         arriving.setdefault(p["stop"], []).append(p)
-    reach_cache: dict[str, float] = {}
-
-    def reach(label: str) -> float:
-        if label not in reach_cache:
-            reach_cache[label] = max((p["length"] or 0) + reach(p["start"]) for p in arriving.get(label, [])) \
-                if arriving.get(label) else 0.0
-        return reach_cache[label]
+    departing = {p["start"]: p for p in pipes}
+    remaining = {label: len(arriving.get(label, [])) for label in nodes}
+    reach = dict.fromkeys(nodes, 0.0)
+    upstream_ends = deque(label for label, count in remaining.items() if count == 0)
+    processed = 0
+    while upstream_ends:
+        label = upstream_ends.popleft()
+        processed += 1
+        if p := departing.get(label):
+            downstream = p["stop"]
+            reach[downstream] = max(reach[downstream], (p["length"] or 0) + reach[label])
+            remaining[downstream] -= 1
+            if remaining[downstream] == 0:
+                upstream_ends.append(downstream)
+    if processed != len(nodes):
+        raise ValueError("Conduits contain a cycle or an invalid flow path.")
 
     def level(label: str) -> int:
         return len(rename.get(label, label).split("-"))
 
     lines: list[dict[str, Any]] = []
-    queue: list[tuple[str, dict[str, Any] | None, str]] = []
+    queue: deque[tuple[str, dict[str, Any] | None, str]] = deque()
     for i, outfall in enumerate(sorted(k for k, n in nodes.items() if n["kind"] == "outfall")):
         queue.append((outfall, None, f"{prefix}{i + 1}"))
+    used_names = {name.casefold() for _, _, name in queue}
     while queue:
-        start, first, name = queue.pop(0)
+        start, first, name = queue.popleft()
         chain, used, here, step = [start], [], start, first
         while True:
             options = [step] if step else arriving.get(here, [])
@@ -235,10 +292,16 @@ def split_lines(nodes: dict[str, Any], pipes: list[dict[str, Any]], rename: dict
             if step is None:
                 same = level(here) if nodes[here]["kind"] != "outfall" else None
                 options = sorted(options, key=lambda p: (same is not None and level(p["start"]) != same,
-                                                         -((p["length"] or 0) + reach(p["start"]))))
+                                                         -((p["length"] or 0) + reach[p["start"]]), p["label"]))
                 for side in options[1:]:
                     junction = rename.get(here, here).split("-")[-1]
-                    queue.append((here, side, f"{name}-{junction}"))
+                    branch = base = f"{name}-{junction}"
+                    index = 2
+                    while branch.casefold() in used_names:
+                        branch = f"{base}-{index}"
+                        index += 1
+                    used_names.add(branch.casefold())
+                    queue.append((here, side, branch))
             pipe = options[0]
             used.append(pipe)
             here = pipe["start"]
@@ -260,9 +323,9 @@ def stations(nodes: dict[str, Any], chain: list[str]) -> list[float]:
 # --------------------------------------------------------------------------- parts
 
 
-def _choose_parts(parts_list: str, pipe_family: str, structure_family: str, structure_diameter: float,
+def _choose_parts(target: DrawingTarget, parts_list: str, pipe_family: str, structure_family: str, structure_diameter: float,
                   pipe_diameters: set[float]) -> dict[str, Any]:
-    data = call("list_gravity_parts", {"parts_list": parts_list})
+    data = call("list_gravity_parts", {"parts_list": parts_list, "target": target})
 
     def matching(groups: list[dict[str, Any]], words: str) -> list[dict[str, Any]]:
         exact = [f for f in groups if f["family"].lower() == words.lower()]
@@ -275,10 +338,13 @@ def _choose_parts(parts_list: str, pipe_family: str, structure_family: str, stru
     sizes = [x for x in pipes[0]["sizes"] if x["inner_diameter"]]
     pipe_map = {}
     for d in sorted(pipe_diameters):
-        # SewerGEMS gives the true bore (191 mm for a 200 mm PVC pipe); the catalogue lists nominal sizes,
-        # so take the smallest catalogue size not below it, else the largest.
-        bigger = [x for x in sizes if x["inner_diameter"] >= d - 0.5]
-        pipe_map[d] = min(bigger, key=lambda x: x["inner_diameter"]) if bigger else max(sizes, key=lambda x: x["inner_diameter"])
+        # Allow the small difference between a true bore and its nominal catalogue size (191 -> 200 mm).
+        bigger = [x for x in sizes if x["Units"].casefold() in ("mm", "millimeter", "millimeters", "millimetres")
+                  and d - 0.5 <= x["inner_diameter"] <= d + max(0.5, d * 0.05)]
+        if not bigger:
+            available = ", ".join(x["Label"] for x in sizes) or "none"
+            raise ValueError(f"No suitable metric catalogue size for {d:g} mm in '{pipes[0]['family']}'. Available: {available}.")
+        pipe_map[d] = min(bigger, key=lambda x: x["inner_diameter"])
 
     # The manhole: taken from the parts list when it has the family in that size, otherwise added to the list
     # from the catalogue (structure_family must then be the exact family description).
@@ -309,6 +375,10 @@ def _plan(params: dict[str, Any]) -> dict[str, Any]:
     rename = read_rename(params.get("rename_csv"))
     nodes, pipes = data["nodes"], data["pipes"]
     problems = validate(nodes, pipes)
+    names = [_name(rename, label) for label in nodes] + [f"P {_name(rename, p['start'])}" for p in pipes]
+    collisions = [name for name, count in Counter(n.casefold() for n in names).items() if count > 1]
+    if collisions:
+        problems.append(f"Duplicate drawing part names after renaming: {', '.join(collisions[:20])}")
     lines = split_lines(nodes, pipes, rename, params.get("line_prefix", DEFAULTS["line_prefix"])) if not problems else []
     return {"source": data["source"], "nodes": nodes, "pipes": pipes, "rename": rename, "problems": problems, "lines": lines}
 
@@ -356,11 +426,9 @@ PRESENTATION: dict[str, Any] = {
 }
 
 
-def present(network: str, lines: list[str], options: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Plan and profile presentation for an imported network, as one edit batch."""
-    o = {**PRESENTATION, **(options or {})}
+def _presentation_ops(network: str, lines: list[str], o: dict[str, Any]) -> list[dict[str, Any]]:
     h = float(o["label_height_mm"])
-    ops: list[dict[str, Any]] = [
+    return [
         {"op": "label_style_create", "kind": "pipe_label", "name": o["pipe_label_style"], "if_exists": "replace",
          "components": [{"type": "arrow", "name": "Flow"},
                         {"name": "Size", "text": o["pipe_label_text"], "height": h, "attachment": "BottomCenter", "y_offset": 1.0}]},
@@ -369,9 +437,6 @@ def present(network: str, lines: list[str], options: dict[str, Any] | None = Non
         {"op": "layer_create", "name": o["alignment_layer"], "on": False, "if_exists": "skip"},
         {"op": "alignment_label_set", "alignments": lines, "label_set": o["alignment_label_set"], "layer": o["alignment_layer"]},
     ]
-    for line in lines:
-        ops.append({"op": "profile_view_set", "profile_view": f"{line} - Profile", "style": o["profile_view_style"]})
-    return call("edit", {"operations": ops}, timeout=EDIT_TIMEOUT)
 
 
 # --------------------------------------------------------------------------- band table (drawn, like the LISP sheets)
@@ -481,36 +546,87 @@ def band_table(line: dict[str, Any], nodes: dict[str, Any], view: dict[str, Any]
     return ops
 
 
-def _stack_views(origin: list[float], names: list[str], gap: float, below: float = 0.0) -> None:
-    """A profile view's height depends on its level range and the style's exaggeration, so the views are created
-    first and then moved: left edges at origin x, the first top edge at origin y, each next one below the last."""
-    views = {v["name"]: v for v in call("list_profile_views")["profileViews"]}
+def _finish_ops(origin: list[float], lines: list[dict[str, Any]], nodes: dict[str, Any],
+                views: dict[str, Any], gap: float, draw_tables: bool) -> list[dict[str, Any]]:
     moves, top = [], origin[1]
-    for name in names:
-        ext = views.get(name, {}).get("extents")
+    annotations: list[dict[str, Any]] = []
+    for line in lines:
+        name = f"{line['name']} - Profile"
+        view = views.get(name)
+        ext = view.get("extents") if view else None
         if not isinstance(ext, dict):
-            continue
-        (x0, y0, _), (_, y1, _) = ext["min"], ext["max"]
+            raise ValueError(f"Cannot read the extents of profile view '{name}'.")
+        (x0, y0, _), (x1, y1, _) = ext["min"], ext["max"]
         dx, dy = origin[0] - x0, top - y1
         if abs(dx) > 1e-6 or abs(dy) > 1e-6:
-            moves.append({"op": "entity_move", "handles": [views[name]["handle"]], "dx": dx, "dy": dy})
-        top -= (y1 - y0) + below + gap
-    if moves:
-        call("edit", {"operations": moves}, timeout=EDIT_TIMEOUT)
+            moves.append({"op": "entity_move", "handles": [view["handle"]], "dx": dx, "dy": dy})
+        top -= y1 - y0 + gap + (TABLE_HEIGHT if draw_tables else 0)
+        if draw_tables:
+            moved = {**view, "extents": {"min": [x0 + dx, y0 + dy], "max": [x1 + dx, y1 + dy]}}
+            annotations.extend(band_table(line, nodes, moved))
+
+    if annotations:
+        moves.extend([
+            {"op": "layer_create", "name": TEXT_LAYER, "color": 3, "if_exists": "skip"},
+            {"op": "layer_create", "name": GRID_LAYER, "color": 4, "if_exists": "skip"},
+        ])
+        moves.extend({"op": "draw_annotations", "items": annotations[i:i + 5000]} for i in range(0, len(annotations), 5000))
+    return moves
+
+
+def _check_batch(batch: dict[str, Any], phase: str) -> None:
+    if len(batch["operations"]) > MAX_BATCH_OPERATIONS:
+        raise ValueError(f"SewerGEMS {phase} exceeds {MAX_BATCH_OPERATIONS} operations. Split the export.")
+    if len(json.dumps(batch, allow_nan=False)) + 1024 > 4 * 1024 * 1024:
+        raise ValueError(f"SewerGEMS {phase} exceeds the bridge request size limit. Split the export.")
 
 
 def build(params: dict[str, Any]) -> dict[str, Any]:
+    target = drawing_target(params)
+    request_id = edit_request_id(params)
+    attempt = params.get("finish_attempt", 1)
+    if type(attempt) is not int or not 1 <= attempt <= 20:
+        raise ValueError("'finish_attempt' must be an integer from 1 to 20.")
+
+    def finish_id_for(number: int) -> str:
+        return str(uuid5(UUID(request_id), f"sewergems-finish:{number}"))
+
+    finish_id = finish_id_for(attempt)
     opts = {**DEFAULTS, **{k: v for k, v in params.items() if v is not None}}
+    dry_run = params.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        raise ValueError("'dry_run' must be true or false.")
+    presentation = params.get("presentation", True)
+    if not isinstance(presentation, (bool, dict)):
+        raise ValueError("'presentation' must be true, false, or an object of style overrides.")
+    styled = presentation is not False
+    options = {**PRESENTATION, **(presentation if isinstance(presentation, dict) else {})}
+    draw_tables = styled and options["band_table"]
+    if not isinstance(draw_tables, bool):
+        raise ValueError("'band_table' must be true or false.")
+    gap = float(params.get("profile_view_gap", 30.0))
+    if not math.isfinite(gap) or gap < 0:
+        raise ValueError("'profile_view_gap' must be a finite, non-negative distance.")
+
     plan = _plan(params)
     if plan["problems"]:
         return {"built": False, "problems": plan["problems"], "note": "Fix these in SewerGEMS (or the export) first."}
     nodes, pipes, rename, lines = plan["nodes"], plan["pipes"], plan["rename"], plan["lines"]
-    parts = _choose_parts(opts["parts_list"], opts["pipe_family"], opts["structure_family"],
-                          float(opts["structure_diameter"]), {p["diameter_mm"] for p in pipes})
-    dry_run = bool(params.get("dry_run", False))
-    net = opts["network"]
+    if len(nodes) > 5000 or len(pipes) > 5000:
+        raise ValueError("An import supports up to 5,000 structures and 5,000 pipes. Split the export.")
+    if call("get_drawing_info", {"target": target})["civilDrawingUnits"] != "Meters":
+        raise ValueError("SewerGEMS import requires a Civil 3D drawing set to metres.")
 
-    # ---- batch 1: the network
+    parts = _choose_parts(target, opts["parts_list"], opts["pipe_family"], opts["structure_family"],
+                          float(opts["structure_diameter"]), {p["diameter_mm"] for p in pipes})
+    net = opts["network"]
+    origin = params.get("profile_views_at")
+    if origin is None:
+        origin = [min(n["x"] for n in nodes.values()), min(n["y"] for n in nodes.values()) - 50.0]
+    if (not isinstance(origin, list) or len(origin) != 2 or
+            not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in origin)):
+        raise ValueError("'profile_views_at' must be a finite [x, y] coordinate.")
+
     structures = [{
         "name": _name(rename, label), "description": f"SewerGEMS {label}" + (" (outfall)" if n["kind"] == "outfall" else ""),
         "at": [n["x"], n["y"], n["ground"]], "family": parts["structure_family"],
@@ -519,95 +635,96 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
     pipe_ops = []
     for p in pipes:
         size = parts["pipe_sizes"][p["diameter_mm"]]
-        half = size["inner_diameter"] / 2000.0
+        p["nominal_mm"] = size["inner_diameter"]
+        half = p["nominal_mm"] / 2000.0
         a, b = nodes[p["start"]], nodes[p["stop"]]
         pipe_ops.append({
-            "name": f"P {_name(rename, p['start'])}", "description": f"%%c{size['inner_diameter']:g}",
+            "name": f"P {_name(rename, p['start'])}", "description": f"%%c{p['nominal_mm']:g}",
             "start": [a["x"], a["y"], p["inv_start"] + half], "end": [b["x"], b["y"], p["inv_stop"] + half],
-            "family": parts["pipe_family"], "size_index": size["size_index"],
+            "family": parts["pipe_family"], "size_index": size["size_index"], "verify_bore_mm": p["nominal_mm"],
+            "start_structure": _name(rename, p["start"]), "end_structure": _name(rename, p["stop"]),
         })
-    network_ops: list[dict[str, Any]] = []
-    if parts["add_structure_family"]:
-        network_ops.append({"op": "parts_list_add_family", "parts_list": opts["parts_list"], "domain": "structure",
-                            "family": parts["structure_family"], "sizes": [parts["structure_diameter"]]})
-    network_ops += [
+
+    core_ops: list[dict[str, Any]] = [
+        {"op": "parts_list_add_family", "parts_list": opts["parts_list"], "domain": "structure",
+         "family": parts["structure_family"], "sizes": [parts["structure_diameter"]]},
         {"op": "pipe_network_create", "name": net, "parts_list": opts["parts_list"],
          "description": f"From SewerGEMS: {Path(plan['source']).name}"},
-        {"op": "pipe_network_add", "network": net, "structures": structures, "pipes": pipe_ops,
-         "connect_tolerance": 0.05},
+        {"op": "pipe_network_add", "network": net, "structures": structures, "pipes": pipe_ops},
     ]
-    first = call("edit", {"dry_run": dry_run, "operations": network_ops}, timeout=EDIT_TIMEOUT)
-    if not first.get("applied") or dry_run:
-        return {"built": False, "dryRun": dry_run, "network": first}
-
-    added = first["results"][-1]["result"]
-    handle = {c["name"]: c["handle"] for c in added["created"]}
-    connections = added["connections"]
-
-    # Civil 3D may hold a rim above the given level when the structure part cannot be that shallow.
-    levels = call("list_structures", {"network_name": net, "limit": 5000})["structures"]
-    mismatches = []
-    for st in levels:
-        label = next((k for k in nodes if _name(rename, k) == st["name"]), None)
-        if label and (abs(st["rimElevation"] - nodes[label]["ground"]) > INVERT_TOLERANCE
-                      or abs(st["sumpElevation"] - nodes[label]["invert"]) > INVERT_TOLERANCE):
-            mismatches.append(f"{st['name']}: rim {st['rimElevation']} (ground {nodes[label]['ground']}), "
-                              f"sump {st['sumpElevation']} (invert {nodes[label]['invert']})")
-
-    # ---- batch 2: one alignment, ground profile and profile view per line
-    origin = params.get("profile_views_at")
-    if not origin:
-        xs, ys = [n["x"] for n in nodes.values()], [n["y"] for n in nodes.values()]
-        origin = [min(xs), min(ys) - 50.0]   # top-left of the first view, below the plan
-    spacing = 10.0   # provisional; _stack_views places the views once their sizes are known
-    ops: list[dict[str, Any]] = []
+    style = params.get("profile_view_style") or (options["profile_view_style"] if styled else None)
     for i, line in enumerate(lines):
         chain = line["nodes"]
         st = stations(nodes, chain)
         name = line["name"]
-        ops.append({"op": "alignment_create", "name": name, "points": [[nodes[k]["x"], nodes[k]["y"]] for k in chain],
-                    "description": f"{_name(rename, chain[0])} to {_name(rename, chain[-1])}"})
-        ops.append({"op": "profile_create", "alignment": name, "name": f"{name} - Ground",
-                    "pvis": [[s, nodes[k]["ground"]] for s, k in zip(st, chain)]})
-        ops.append({"op": "profile_view_create", "alignment": name, "name": f"{name} - Profile",
-                    "at": [origin[0], origin[1] - i * spacing], **({"style": params["profile_view_style"]} if params.get("profile_view_style") else {})})
-        part_handles = [handle[_name(rename, k)] for k in chain] + [handle[f"P {_name(rename, p['start'])}"] for p in line["pipes"]]
-        ops.append({"op": "profile_view_add_parts", "profile_view": f"{name} - Profile", "handles": part_handles})
-    second = call("edit", {"operations": ops}, timeout=EDIT_TIMEOUT)
-    looks, tables = None, 0
-    options = {**PRESENTATION, **(params["presentation"] if isinstance(params.get("presentation"), dict) else {})}
-    styled = params.get("presentation", True) is not False
-    if second.get("applied"):
-        if styled:
-            looks = present(net, [l["name"] for l in lines], options)
-        draw_tables = styled and options["band_table"]
-        view_names = [f"{l['name']} - Profile" for l in lines]
-        _stack_views(origin, view_names, gap=float(params.get("profile_view_gap", 30.0)), below=TABLE_HEIGHT if draw_tables else 0.0)
-        if draw_tables:
-            for p in pipes:
-                p["nominal_mm"] = parts["pipe_sizes"][p["diameter_mm"]]["inner_diameter"]
-            views = {v["name"]: v for v in call("list_profile_views")["profileViews"]}
-            layer_ops = [{"op": "layer_create", "name": TEXT_LAYER, "color": 3, "if_exists": "skip"},
-                         {"op": "layer_create", "name": GRID_LAYER, "color": 4, "if_exists": "skip"}]
-            for i, line in enumerate(lines):
-                view = views.get(f"{line['name']} - Profile")
-                if not view or not isinstance(view.get("extents"), dict):
-                    continue
-                ops = (layer_ops if i == 0 else []) + band_table(line, nodes, view)
-                done = call("edit", {"operations": ops}, timeout=EDIT_TIMEOUT)
-                tables += 1 if done.get("applied") else 0
+        core_ops.extend([
+            {"op": "alignment_create", "name": name, "points": [[nodes[k]["x"], nodes[k]["y"]] for k in chain],
+             "description": f"{_name(rename, chain[0])} to {_name(rename, chain[-1])}"},
+            {"op": "profile_create", "alignment": name, "name": f"{name} - Ground",
+             "pvis": [[s, nodes[k]["ground"]] for s, k in zip(st, chain)]},
+            {"op": "profile_view_create", "alignment": name, "name": f"{name} - Profile",
+             "at": [origin[0], origin[1] - i * 10.0], **({"style": style} if style else {})},
+            {"op": "profile_view_add_parts", "profile_view": f"{name} - Profile", "pipe_network": net,
+             "structure_names": [_name(rename, k) for k in chain],
+             "pipe_names": [f"P {_name(rename, p['start'])}" for p in line["pipes"]]},
+        ])
+    if styled:
+        core_ops.extend(_presentation_ops(net, [line["name"] for line in lines], options))
 
+    # Bind finish inputs to the core request so the same import ID cannot change the planned output.
+    finish_plan = {"origin": origin, "gap": gap, "draw_tables": draw_tables}
+    core_batch = {"operations": core_ops, "target": target, "request_id": request_id,
+                  "dry_run": dry_run, "sewergems_finish": finish_plan}
+    _check_batch(core_batch, "network and profiles")
+    core = call("edit", core_batch, timeout=EDIT_TIMEOUT)
+    if not core.get("applied"):
+        return {"built": False, "dryRun": dry_run, "target": target, "core": core,
+                "note": "Dry run covers the network, profile objects, and styles." if dry_run else None}
+
+    finish = {"request_id": finish_id}
+    mismatches = []
+    try:
+        if attempt > 1:
+            previous = call("get_edit_status", {"request_id": finish_id_for(attempt - 1), "target": target})
+            if previous["state"] != "completed" or previous.get("applied") is not False:
+                raise ValueError("A new finish attempt requires a confirmed rollback of the preceding finish attempt.")
+        status = call("get_edit_status", {"request_id": finish_id, "target": target})
+        if status["state"] != "unknown":
+            finish = {**finish, **(status.get("result") or status)}
+        else:
+            views = {v["name"]: v for v in call("list_profile_views", {"target": target})["profileViews"]}
+            finish_ops = _finish_ops(origin, lines, nodes, views, gap, draw_tables)
+            if finish_ops:
+                batch = {"operations": finish_ops, "target": target, "request_id": finish_id}
+                _check_batch(batch, "profile layout and bands")
+                finish = call("edit", batch, timeout=EDIT_TIMEOUT)
+            else:
+                finish = {**finish, "applied": True, "state": "already_positioned"}
+
+        by_name = {_name(rename, label): node for label, node in nodes.items()}
+        levels = call("list_structures", {"network_name": net, "limit": 5000, "target": target})["structures"]
+        for st in levels:
+            node = by_name.get(st["name"])
+            if not node:
+                continue
+            rim, sump = st["rimElevation"], st["sumpElevation"]
+            if (not isinstance(rim, (int, float)) or not isinstance(sump, (int, float)) or
+                    abs(rim - node["ground"]) > INVERT_TOLERANCE or abs(sump - node["invert"]) > INVERT_TOLERANCE):
+                mismatches.append(f"{st['name']}: rim {rim} (ground {node['ground']}), sump {sump} (invert {node['invert']})")
+    except (BridgeError, ValueError) as exc:
+        return {"built": False, "network": net, "coreApplied": True, "target": target,
+                "request_id": request_id, "finish": finish, "error": str(exc)}
+
+    built = finish.get("applied") is True
     return {
-        "built": bool(second.get("applied")),
-        "network": net, "manholes": len(nodes), "pipes": len(pipes), "connections": connections,
+        "built": built, "network": net, "coreApplied": True, "target": target, "request_id": request_id,
+        "finish": finish, "manholes": len(nodes), "pipes": len(pipes), "connections": 2 * len(pipes),
         "parts": {"pipe": parts["pipe_family"], "pipeSizes": {str(k): v["Label"] for k, v in parts["pipe_sizes"].items()},
-                  "structure": f"{parts['structure_family']} {parts['structure_diameter']:g} mm"
-                               + (f" (added to '{opts['parts_list']}')" if parts["add_structure_family"] else "")},
+                  "structure": f"{parts['structure_family']} {parts['structure_diameter']:g} mm"},
         "levelMismatches": mismatches,
         "lines": [{"name": l["name"], "pipes": len(l["pipes"]), "length": round(stations(nodes, l["nodes"])[-1], 2)} for l in lines],
-        "profiles": second if not second.get("applied") else "created",
-        "presentation": "applied" if looks and looks.get("applied") else looks,
-        "bandTables": tables,
-        "note": "Pipe ends are at invert + catalogue bore / 2, so Civil 3D reports the SewerGEMS inverts. "
-                "Laterals and property connections are not imported.",
+        "profiles": "created",
+        "presentation": "applied" if styled else None,
+        "bandTables": len(lines) if draw_tables and built else 0,
+        "warnings": core.get("warnings", []) + finish.get("warnings", []),
     }

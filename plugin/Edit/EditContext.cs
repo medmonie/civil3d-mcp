@@ -8,7 +8,7 @@ internal sealed class EditContext
     public required Document Doc { get; init; }
     public required Transaction Tr { get; init; }
     public Database Db => Doc.Database;
-    public CivilDoc Civ => CivilApp.ActiveDocument;
+    public CivilDoc Civ => CivilDoc.GetCivilDocument(Db);
     public List<string> Warnings { get; } = new();
     public int OpIndex { get; set; }
 
@@ -55,9 +55,11 @@ internal sealed class EditContext
     public List<Entity> OpenEntities(JsonElement p, string? plainOnlyFor = null)
     {
         var list = new List<Entity>();
+        var seen = new HashSet<ObjectId>();
         foreach (var h in StrList(p, "handles", 5000))
         {
             var id = IdFromHandle(Db, h);
+            if (!seen.Add(id)) continue;
             Entity e;
             try
             {

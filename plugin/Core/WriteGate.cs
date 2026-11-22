@@ -3,70 +3,74 @@ using System.Diagnostics;
 namespace C3dMcpBridge;
 
 /// <summary>
-/// The single permission for editing. Reading never needs it. The first edit request of a Civil 3D session shows ONE
-/// dialog; after "Yes" every later edit in this session runs without asking again, in any drawing, until Civil 3D is
-/// closed or the user runs MCPREVOKE. MCPALLOW grants it up front from the command line. Main thread only.
+/// Edit permission for each open drawing. Main thread only.
 /// </summary>
 internal static class WriteGate
 {
     private static readonly TimeSpan DeclineCooldown = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan LateAnswer = TimeSpan.FromMinutes(9);   // the caller gives up at ~10 minutes
 
-    private static bool _granted;
-    private static DateTime _grantedUtc;
-    private static string _grantedBy = "";
-    private static DateTime _declinedUtc = DateTime.MinValue;
+    private sealed record Permission(DateTime GrantedUtc, string GrantedBy);
+    private static readonly object PermissionKey = new();
+    private static readonly object DeclinedKey = new();
 
-    public static bool Granted => _granted;
+    private static Permission? ActivePermission => AcApp.DocumentManager.MdiActiveDocument?.UserData[PermissionKey] as Permission;
+    public static bool Granted => ActivePermission != null;
 
-    public static object Status() => new
+    public static object Status()
     {
-        editingAllowed = _granted,
-        grantedUtc = _granted ? _grantedUtc : (DateTime?)null,
-        grantedBy = _granted ? _grantedBy : null,
-        scope = "this Civil 3D session, all drawings; ends when Civil 3D closes or MCPREVOKE is run",
-        howToGrant = "answer Yes to the one-time dialog on the first edit, or run MCPALLOW in Civil 3D",
-        auditLog = Audit.FilePath,
-    };
+        var permission = ActivePermission;
+        return new
+        {
+            editingAllowed = permission != null,
+            grantedUtc = permission?.GrantedUtc,
+            grantedBy = permission?.GrantedBy,
+            scope = "active drawing; ends when the drawing closes or MCPREVOKE is run",
+            howToGrant = "answer Yes to the first edit, or run MCPALLOW in the intended drawing",
+            auditLog = Audit.FilePath,
+        };
+    }
 
-    public static void Grant(string by)
+    public static void Grant(Document doc, string by)
     {
-        _granted = true;
-        _grantedUtc = DateTime.UtcNow;
-        _grantedBy = by;
-        Audit.Write("permission_granted", new { by });
+        doc.UserData[PermissionKey] = new Permission(DateTime.UtcNow, by);
+        doc.UserData.Remove(DeclinedKey);
+        Audit.Write("permission_granted", new { by, drawing = doc.Name });
     }
 
     public static void Revoke(string by)
     {
-        if (_granted) Audit.Write("permission_revoked", new { by });
-        _granted = false;
+        foreach (Document doc in AcApp.DocumentManager)
+        {
+            if (doc.UserData.ContainsKey(PermissionKey)) Audit.Write("permission_revoked", new { by, drawing = doc.Name });
+            doc.UserData.Remove(PermissionKey);
+        }
     }
 
     /// <summary>Returns null when editing may proceed, otherwise the reason it may not.</summary>
     public static string? Ensure(Document doc, string firstRequestSummary)
     {
-        if (_granted) return null;
-        if (DateTime.UtcNow - _declinedUtc < DeclineCooldown)
+        if (doc.UserData[PermissionKey] is Permission) return null;
+        if (doc.UserData[DeclinedKey] is DateTime declined && DateTime.UtcNow - declined < DeclineCooldown)
             return "Editing was declined in Civil 3D a moment ago. Ask the user before trying again (they can also run MCPALLOW).";
 
         var sw = Stopwatch.StartNew();
         bool yes = Ui.AskYesNo(
-            "Claude - allow editing in Civil 3D?",
-            "Claude is asking to EDIT drawings in this Civil 3D session.\n\n" +
+            "Allow MCP edits in Civil 3D?",
+            "An MCP client such as ChatGPT is asking to edit this Civil 3D drawing.\n\n" +
             "First request (drawing " + Path.GetFileName(doc.Name) + "):\n" + firstRequestSummary + "\n\n" +
-            "Yes  = allow this and all later edits until Civil 3D is closed. You will not be asked again.\n" +
+            "Yes  = allow edits in this drawing until it closes or you run MCPREVOKE.\n" +
             "No   = nothing is changed.\n\n" +
             "Every edit is one undo step and is written to the audit log. Run MCPREVOKE at any time to stop edits.");
         if (!yes)
         {
-            _declinedUtc = DateTime.UtcNow;
+            doc.UserData[DeclinedKey] = DateTime.UtcNow;
             Audit.Write("permission_declined", new { drawing = doc.Name });
             return "The user declined editing in Civil 3D. Nothing was changed.";
         }
-        Grant("dialog");
+        Grant(doc, "dialog");
         return sw.Elapsed > LateAnswer
-            ? "Editing is now allowed, but the answer came too late for this request. Send the same edit again."
+            ? "Editing is now allowed, but this request expired without applying. Use a new request ID if you still want the edit."
             : null;
     }
 }

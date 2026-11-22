@@ -1,0 +1,200 @@
+CHATGPT AND CIVIL 3D 2027 INTEGRATION CHANGE LOG
+================================================
+Date 2026-11-21
+Project civil3d-mcp, bridge version 0.9.0
+
+Scope
+-----
+This log records the ChatGPT integration changes, the rebuilt Windows package,
+and the changes made to the local test session. Paths are relative to the
+project folder.
+
+01  README.md
+-------------
+Added
+  - ChatGPT desktop setup using Settings > MCP servers and STDIO.
+  - Codex TOML setup for an installed executable or a Python source checkout.
+  - ChatGPT cloud setup using Secure MCP Tunnel and the server's --read-only
+    option. It covers the tunnel client, workspace access, credentials, and
+    checking the connection with a ping.
+  - A description of the drawing data that can be returned to the MCP client.
+Removed
+  - The Claude-only setup as the primary installation path.
+  - The claim that nothing leaves the computer.
+Modified
+  - Updated the architecture diagram, command examples, permission guidance,
+    troubleshooting, update steps, and uninstall steps for ChatGPT and Codex.
+  - Documented the separate roles of tool approvals and Civil 3D edit approval.
+  - Kept a short Claude Desktop setup path using the existing JSON snippet.
+Why
+  - Users need instructions for the client they actually use. The bridge runs
+    locally, and tool results can still go to the AI client.
+
+02  package/install.bat
+----------------------
+Added
+  - Generation of codex_mcp_config_snippet.toml alongside the installed server.
+  - UTF-8 output and escaping for the full Windows executable path in the TOML.
+  - A failure check for writing the TOML snippet.
+  - Instructions for adding or updating civil3d in ChatGPT desktop using STDIO.
+Removed
+  - The Claude-only console instructions and automatic printing of Claude JSON.
+Modified
+  - Renamed the server install directory variable to C3D_INSTALL_DIR and quoted
+    the directory assignments and printed executable path.
+  - Continued writing the Claude JSON snippet using the renamed variable.
+Why
+  - The installer gives ChatGPT and Codex users a ready-to-use command and
+    configuration, including when the installation path contains spaces.
+
+03  package/INSTALL.txt
+----------------------
+Added
+  - A reference to the browser and cloud setup in the README.
+  - Instructions for updating an existing civil3d server entry.
+Removed
+  - Claude-only installation and permission directions as the default workflow.
+Modified
+  - Updated the quick-start steps for ChatGPT desktop, including opening a
+    Civil 3D drawing, running MCPSTATUS, and verifying the connection.
+  - Revised approval, update, and removal instructions for MCP clients.
+Why
+  - The quick guide should match the installer and the ChatGPT settings users
+    see when they connect the tool.
+
+04  package/uninstall.bat
+------------------------
+Added
+  - Instructions to stop the tunnel runtime and remove the ChatGPT custom MCP
+    server if a tunnel was configured.
+Removed
+  - The cleanup message that referred only to Claude Desktop.
+Modified
+  - The script now directs users to remove civil3d from ChatGPT desktop or the
+    relevant client's configuration after running the local uninstall.
+Why
+  - Removing the local binaries and removing a client or tunnel connection are
+    separate actions.
+
+05  plugin/Core/WriteGate.cs
+---------------------------
+Added
+  - Client-neutral wording in the Civil 3D permission prompt.
+Removed
+  - The wording that identified every edit requester as Claude.
+Modified
+  - The prompt title and body now identify the requester as an MCP client and
+    include ChatGPT as an example.
+Why
+  - Users should be able to recognize the permission prompt when they send a
+    request from ChatGPT or another MCP client.
+
+06  plugin/Plugin.cs
+-------------------
+Added
+  - Client-neutral command descriptions and status messages.
+Removed
+  - Claude-specific wording in the command comments and console output.
+Modified
+  - Described MCPSTATUS as selecting the Civil 3D instance for MCP calls.
+  - Updated MCPALLOW and MCPREVOKE messages to describe MCP edit access.
+Why
+  - These commands apply to all clients connected to the Civil 3D bridge.
+
+07  server/server.py
+--------------------
+Added
+  - The --read-only command-line option. It registers only civil3d_read, even
+    if C3D_MCP_SPLIT is enabled.
+  - A server factory that registers tools for standard, split, and read-only
+    operation.
+  - A stdio runner that gives the MCP SDK separate stream buffers and restores
+    the originals during shutdown.
+Removed
+  - The old module-level, two-mode tool registration block.
+  - The SewerGEMS error instruction directing split-mode users to an edit tool
+    that could only submit edit batches.
+Modified
+  - Read-only help excludes edit operations and the SewerGEMS import action.
+  - Edit and import errors explain the required write-enabled tool.
+  - The split edit tool now shares the standard write annotations, including
+    idempotentHint=False to mark edits as unsafe to repeat automatically.
+Why
+  - Cloud users can connect with reads enabled and writes blocked by the server.
+  - The stdio change fixes the packaged server's closed-stream error when the
+    MCP client disconnects.
+
+08  server/catalog.py
+---------------------
+Added
+  - An include_edits option for generating full or read-only help.
+Removed
+  - The SewerGEMS write action from the read tool description and from help in
+    read-only mode.
+Modified
+  - The catalogue renders the actions applicable to the selected mode. Standard
+    help continues to include the full read and edit catalogue.
+Why
+  - Clients should discover the actions they can call in the selected mode.
+
+09  tests/smoke_test.py
+----------------------
+Added
+  - An end-to-end stdio regression test for --read-only with C3D_MCP_SPLIT=1.
+  - Checks for the single read-only tool, its read-only annotation, ping,
+    read-only help, and rejection of edits and SewerGEMS imports.
+Removed
+  - None.
+Modified
+  - Updated the test description and added the new test to the smoke suite.
+Why
+  - The test protects the read-only connection from accidentally exposing
+    write tools while keeping the existing standard and split tests.
+
+10  dist/C3dMcp-2027.zip
+-----------------------
+Added
+  - ChatGPT desktop and cloud setup instructions inside the distribution.
+  - The installer feature that generates the Codex TOML during installation.
+Removed
+  - Superseded server, add-in, installer, and documentation copies from the ZIP.
+Modified
+  - Rebuilt c3d-mcp-server.exe from the updated Python server.
+  - Rebuilt bundle/C3dMcpBridge.bundle/Contents/2027/C3dMcpBridge.dll from the
+    updated C# sources.
+  - Refreshed the packaged README.md, INSTALL.txt, install.bat, and uninstall.bat.
+  - Verified the ZIP contents against all seven build inputs, including the
+    existing PackageContents.xml manifest.
+Why
+  - The installable release needs to contain the verified code and instructions.
+
+11  Generated build output
+--------------------------
+Added
+  - Temporary dist/_chatgpt_build staging files for PyInstaller and ZIP assembly.
+Removed
+  - The temporary staging folder after the final ZIP passed verification.
+Modified
+  - Regenerated the Release add-in and symbols under
+    plugin/bin/Release/net10.0-windows and the associated .NET intermediates
+    under plugin/obj/Release/net10.0-windows.
+Why
+  - The add-in and server had to be rebuilt and tested before packaging.
+
+Testing and local session state
+-------------------------------
+  - Started Civil 3D 2027 Metric and opened the blank Drawing1.dwg. The existing
+    ChatGPT/Codex MCP entry returned drawing information from that session.
+  - The Release build finished with zero warnings and zero errors.
+  - The stdio smoke suite passed in standard, split, and read-only modes.
+  - Both modes of the rebuilt executable read the live drawing and disconnected
+    cleanly. Read-only mode rejected drawing edits and SewerGEMS imports.
+  - The installer was tested in temporary directories. It generated valid
+    Codex TOML and Claude JSON for an installation path with spaces.
+  - The live MCP client held dist/C3dMcp/c3d-mcp-server.exe open, so the updated
+    build was delivered in dist/C3dMcp-2027.zip. The running client uses the
+    previous executable until upgraded. The existing client configuration
+    was used for live verification.
+  - The Secure MCP Tunnel instructions are included. Cloud activation requires
+    a tunnel associated with the user's ChatGPT workspace and was outside the
+    live verification performed here.

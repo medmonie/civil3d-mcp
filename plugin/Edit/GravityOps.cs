@@ -101,8 +101,15 @@ internal static class GravityOps
 
         // Structures a new pipe end can connect to: the existing ones plus the ones added below.
         var structures = new PointIndex<ObjectId>(tolerance);
+        var named = new Dictionary<string, List<ObjectId>>(StringComparer.OrdinalIgnoreCase);
+        void IndexStructure(CivilDb.Structure structure)
+        {
+            structures.Add(structure.Location, structure.ObjectId);
+            if (!named.TryGetValue(structure.Name, out var ids)) named[structure.Name] = ids = new();
+            ids.Add(structure.ObjectId);
+        }
         foreach (ObjectId id in net.GetStructureIds())
-            structures.Add(((CivilDb.Structure)c.Tr.GetObject(id, OpenMode.ForRead)).Location, id);
+            IndexStructure((CivilDb.Structure)c.Tr.GetObject(id, OpenMode.ForRead));
 
         for (int i = 0; i < structureSpecs.Count; i++)
         {
@@ -115,7 +122,7 @@ internal static class GravityOps
             var st = (CivilDb.Structure)c.Tr.GetObject(id, OpenMode.ForWrite);
             Describe(st, s, what);
             SetLevels(st, DblParam(s, "rim"), DblParam(s, "sump"));
-            structures.Add(st.Location, id);
+            IndexStructure(st);
             created.Add(new
             {
                 kind = "structure", id = StrParam(s, "id"), name = st.Name, handle = H(id), part = part.Label,
@@ -141,12 +148,43 @@ internal static class GravityOps
             var pipe = (CivilDb.Pipe)c.Tr.GetObject(id, OpenMode.ForWrite);
             Describe(pipe, s, what);
             int made = 0;
-            foreach (var (end, position) in new[] { (a, CivilDb.ConnectorPositionType.Start), (b, CivilDb.ConnectorPositionType.End) })
+            foreach (var (end, position, key) in new[]
             {
+                (a, CivilDb.ConnectorPositionType.Start, "start_structure"),
+                (b, CivilDb.ConnectorPositionType.End, "end_structure"),
+            })
+            {
+                if (Has(s, key))
+                {
+                    var name = NeedStr(s, key);
+                    if (!named.TryGetValue(name, out var matches) || matches.Count != 1)
+                        throw new ArgumentException($"{what}: '{key}' must name one structure in the network. Found '{name}' {matches?.Count ?? 0} time(s).");
+                    var structure = matches[0];
+                    pipe.ConnectToStructure(position, structure, true);
+                    var connected = position == CivilDb.ConnectorPositionType.Start ? pipe.StartObjectId : pipe.EndObjectId;
+                    if (connected != structure) throw new InvalidOperationException($"{what}: no connection to '{name}' was recorded.");
+                    made++;
+                    continue;
+                }
                 var near = structures.Near(end, planOnly: true);
                 if (near.Count == 0) continue;
+                if (near.Count > 1)
+                {
+                    c.Warn($"{what}: {near.Count} structures match its {position}. Specify '{key}' to choose one.");
+                    continue;
+                }
                 try { pipe.ConnectToStructure(position, near[0], true); made++; }
                 catch (Exception ex) { c.Warn($"{what}: could not connect its {position} to structure {H(near[0])}: {ex.Message}"); }
+            }
+            if (PositiveParam(s, "verify_bore_mm") is double boreMm)
+            {
+                double bore = boreMm / 1000;
+                double actual = pipe.InnerDiameterOrWidth;
+                double actualBore = Math.Abs(actual - bore) <= Math.Abs(actual / 1000 - bore) ? actual : actual / 1000;
+                if (!double.IsFinite(actualBore) || Math.Abs(actualBore - bore) > 0.001 ||
+                    Math.Abs(pipe.StartPoint.Z - actualBore / 2 - (a.Z - bore / 2)) > 0.005 ||
+                    Math.Abs(pipe.EndPoint.Z - actualBore / 2 - (b.Z - bore / 2)) > 0.005)
+                    throw new InvalidOperationException($"{what}: the placed pipe did not preserve the requested bore or inverts.");
             }
             connections += made;
             created.Add(new { kind = "pipe", id = StrParam(s, "id"), name = pipe.Name, handle = H(id), part = part.Label, connections = made });

@@ -118,8 +118,19 @@ internal static class AlignmentOps
         if (StrParam(p, "pipe_network") is string gravity)
         {
             var net = FindPipeNetwork(c.Civ, c.Tr, gravity);
-            AddAll(net.GetPipeIds());
-            AddAll(net.GetStructureIds());
+            AddGravity(net.GetPipeIds(), "pipe_names");
+            AddGravity(net.GetStructureIds(), "structure_names");
+        }
+        else if (Has(p, "pipe_names") || Has(p, "structure_names"))
+            throw new ArgumentException("pipe_names and structure_names require pipe_network.");
+
+        void AddGravity(ObjectIdCollection all, string key)
+        {
+            if (!Has(p, key)) { AddAll(all); return; }
+            var names = ArrParam(p, key, 5000).Select(Text).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (ObjectId id in all)
+                if (c.Tr.GetObject(id, OpenMode.ForRead) is CivilDb.Part part && names.Remove(part.Name)) ids.Add(id);
+            if (names.Count > 0) throw new ArgumentException($"Parts in '{key}' were not found: {string.Join(", ", names.Take(10))}.");
         }
         if (StrParam(p, "pressure_network") is string pressure)
         {
@@ -132,7 +143,7 @@ internal static class AlignmentOps
         if (ids.Count == 0) throw new ArgumentException("profile_view_add_parts: give pipe_network, pressure_network and/or handles.");
 
         int added = 0;
-        foreach (var id in ids)
+        foreach (var id in ids.Distinct())
         {
             switch (c.Tr.GetObject(id, OpenMode.ForWrite))
             {

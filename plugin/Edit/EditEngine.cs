@@ -39,24 +39,24 @@ internal static class EditEngine
         string summary = string.Join(", ", names.GroupBy(n => n, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.Count() > 1 ? $"{g.Count()} x {g.Key}" : g.Key));
 
-        var doc = ActiveDoc();
+        var target = DrawingTarget.Read(p);
+        var requestId = DrawingTarget.ReadId(p, "request_id");
+        var doc = target.RequireActive();
         if (doc.IsReadOnly) throw new InvalidOperationException("The active drawing is read-only.");
 
-        // 2. The one-time permission (a dialog on the first edit of the session).
+        // 2. The first edit of this drawing needs permission.
         if (WriteGate.Ensure(doc, summary + (dryRun ? "  (dry run)" : "")) is string denied)
             return new { applied = false, dryRun, permission = "not granted", reason = denied };
 
-        // The dialog may have been open for a while: make sure we still act on the same drawing.
-        var now = AcApp.DocumentManager.MdiActiveDocument;
-        if (now == null || now.UnmanagedObject != doc.UnmanagedObject)
-            throw new InvalidOperationException("The active drawing changed while waiting for permission. Send the edit again.");
+        target.RequireActive();
 
         // 3. Run every operation in one transaction; the first failure rolls everything back.
         var results = new List<object>();
         EditContext ctx;
         using (doc.LockDocument())
-        using (var tr = doc.Database.TransactionManager.StartTransaction())
         {
+            target.RequireActive();
+            using var tr = doc.Database.TransactionManager.StartTransaction();
             ctx = new EditContext { Doc = doc, Tr = tr };
             for (int i = 0; i < ops.Count; i++)
             {
@@ -69,7 +69,7 @@ internal static class EditEngine
                 {
                     tr.Abort();
                     string error = ErrorText(ex);
-                    Audit.Write("edit_failed", new { drawing = doc.Name, dryRun, summary, failedAt = i + 1, op = names[i], error });
+                    Audit.Write("edit_failed", new { requestId, drawing = doc.Name, dryRun, summary, failedAt = i + 1, op = names[i], error });
                     return new
                     {
                         applied = false, dryRun, failedAt = i + 1, op = names[i], error,
@@ -87,9 +87,9 @@ internal static class EditEngine
         }
 
         // 4. Saving and plotting cannot run inside the transaction; they follow the commit.
-        if (!dryRun) RunAfterCommit(doc, ctx);
+        if (!dryRun) RunAfterCommit(doc, target, ctx);
 
-        Audit.Write(dryRun ? "edit_dry_run" : "edit_applied", new { drawing = doc.Name, summary, operations = ops.Count, warnings = ctx.Warnings.Count });
+        Audit.Write(dryRun ? "edit_dry_run" : "edit_applied", new { requestId, drawing = doc.Name, summary, operations = ops.Count, warnings = ctx.Warnings.Count });
         return new
         {
             applied = !dryRun, dryRun, drawing = Path.GetFileName(doc.Name), operations = ops.Count, results, warnings = ctx.Warnings,
@@ -113,14 +113,23 @@ internal static class EditEngine
         return names;
     }
 
-    private static void RunAfterCommit(Document doc, EditContext ctx)
+    private static void RunAfterCommit(Document doc, DrawingTarget target, EditContext ctx)
     {
         try { doc.Editor.UpdateScreen(); } catch { /* cosmetic */ }
-        using (doc.LockDocument())
+        if (ctx.AfterCommit.Count == 0) return;
+        try
+        {
+            target.RequireActive();
+            using var docLock = doc.LockDocument();
             foreach (var work in ctx.AfterCommit)
             {
-                try { work(); }
+                try { target.RequireActive(); work(); }
                 catch (Exception ex) { ctx.Warnings.Add($"after commit (save / plot) FAILED: {ex.GetType().Name}: {ex.Message}"); }
             }
+        }
+        catch (Exception ex)
+        {
+            ctx.Warnings.Add($"after commit (save / plot) could not start: {ErrorText(ex)}");
+        }
     }
 }

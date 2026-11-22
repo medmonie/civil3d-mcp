@@ -14,10 +14,27 @@ internal static class DrawOps
         ops["draw_arc"] = DrawArc;
         ops["draw_text"] = DrawText;
         ops["draw_mtext"] = DrawMText;
+        ops["draw_annotations"] = DrawAnnotations;
         ops["draw_hatch"] = DrawHatch;
         ops["draw_dimension"] = DrawDimension;
         ops["draw_leader"] = DrawLeader;
         ops["draw_table"] = DrawTable;
+    }
+
+    private static object DrawAnnotations(EditContext c, JsonElement p)
+    {
+        var items = NeedArr(p, "items", 5000);
+        foreach (var item in items)
+        {
+            _ = NeedStr(item, "op") switch
+            {
+                "draw_line" => DrawLine(c, item),
+                "draw_text" => DrawText(c, item),
+                "draw_mtext" => DrawMText(c, item),
+                _ => throw new ArgumentException("draw_annotations accepts draw_line, draw_text, and draw_mtext items."),
+            };
+        }
+        return new { drawn = items.Count };
     }
 
     // ---------------------------------------------------------------- geometry

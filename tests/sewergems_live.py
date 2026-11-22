@@ -20,7 +20,8 @@ def check(title, ok, detail=""):
         FAILED.append(title)
 
 
-drawing = call("ping")["activeDrawing"]
+info = call("get_drawing_info")
+drawing = info["name"]
 if not (drawing.lower().startswith("drawing") or "mcp_test" in drawing.lower()):
     sys.exit(f"Refusing to draw in '{drawing}': open a new drawing first.")
 
@@ -28,9 +29,11 @@ report = sewergems.check(SRC)
 print(json.dumps(report, indent=1), flush=True)
 check("export is ready", report["ready"], report["problems"])
 
-result = sewergems.build({**SRC, "network": "MCP-SEWER"})
+result = sewergems.build({**SRC, "network": "MCP-SEWER", "target": info["target"], "request_id": info["new_edit_request_id"]})
 print(json.dumps(result, indent=1, default=str), flush=True)
 check("built", result.get("built") is True)
+if not result.get("built"):
+    sys.exit(1)
 check("all pipe ends connected", result.get("connections") == 2 * result.get("pipes", -1), result.get("connections"))
 
 plan = sewergems._plan(SRC)
@@ -64,3 +67,4 @@ check("profile views are below the plan", bool(boxes) and boxes[-1][1] < plan_mi
 check("presentation applied", result.get("presentation") == "applied", result.get("presentation"))
 check("a band table under every profile view", result.get("bandTables") == len(report["lines"]), result.get("bandTables"))
 print("ALL PASS" if not FAILED else "FAILED: " + ", ".join(FAILED))
+sys.exit(int(bool(FAILED)))

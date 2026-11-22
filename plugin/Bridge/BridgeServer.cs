@@ -29,6 +29,7 @@ internal static class BridgeServer
     private static string _token = "";
 
     public static int Port => _listener?.LocalEndpoint is IPEndPoint ep ? ep.Port : 0;
+    public static Guid SessionId { get; private set; }
 
     private static string BridgeFile => Path.Combine(BridgeInfo.DataFolder, "bridge.json");
 
@@ -37,6 +38,7 @@ internal static class BridgeServer
         if (_listener != null) return;
 
         _token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        SessionId = Guid.NewGuid();
         _listener = new TcpListener(IPAddress.Loopback, 0);   // 127.0.0.1 only, never 0.0.0.0
         _listener.Start();
         _cts = new CancellationTokenSource();
@@ -47,7 +49,7 @@ internal static class BridgeServer
         _ = Task.Run(() => AcceptLoop(ct));
     }
 
-    /// <summary>Publishes this Civil 3D as the one Claude talks to (also called by MCPSTATUS when several are open).</summary>
+    /// <summary>Publishes this Civil 3D instance as the target for MCP clients.</summary>
     public static void WriteBridgeFile()
     {
         if (_listener == null) return;
@@ -56,6 +58,7 @@ internal static class BridgeServer
         {
             port = Port,
             token = _token,
+            session_id = SessionId,
             pid = Environment.ProcessId,
             startedUtc = DateTime.UtcNow
         }));
@@ -82,7 +85,7 @@ internal static class BridgeServer
     public static string Describe() => _listener == null
         ? "Civil 3D MCP bridge: not running."
         : $"Civil 3D MCP bridge v{BridgeInfo.Version} listening on 127.0.0.1:{Port} (" +
-          $"UI context: {(MainThread.HasUiContext ? "yes" : "NO")}; editing: {(WriteGate.Granted ? "ALLOWED for this session" : "not allowed yet")}). " +
+          $"UI context: {(MainThread.HasUiContext ? "yes" : "NO")}; editing: {(WriteGate.Granted ? "allowed for the active drawing" : "not allowed yet")}). " +
           $"Connection details: {BridgeFile}";
 
     private static async Task AcceptLoop(CancellationToken ct)
@@ -196,8 +199,25 @@ internal static class BridgeServer
 
         try
         {
-            var result = await MainThread.RunAsync(() => action.Run(args), QueueTimeout);
-            return JsonSerializer.Serialize(new { id = reqId, ok = true, result }, Json.Out);
+            if (method == "get_edit_status")
+                return Success(reqId, action.Run(args));  // Request status remains available while Civil 3D is busy.
+            if (action.Kind == "write")
+            {
+                var target = DrawingTarget.Read(args);
+                var requestId = DrawingTarget.ReadId(args, "request_id");
+                var result = await EditRequests.RunAsync(requestId, target, args, () =>
+                    MainThread.RunAsync(() => action.Run(args), QueueTimeout));
+                return Success(reqId, result);
+            }
+
+            var readTarget = Has(args, "target") ? DrawingTarget.Read(args) : (DrawingTarget?)null;
+            var read = await MainThread.RunAsync(() =>
+            {
+                var doc = readTarget?.RequireActive() ?? AcApp.DocumentManager.MdiActiveDocument;
+                var target = DrawingTarget.Describe(doc);
+                return (Result: action.Run(args), Target: target);
+            }, QueueTimeout);
+            return Success(reqId, read.Result, read.Target);
         }
         catch (TimeoutException ex)
         {
@@ -208,6 +228,9 @@ internal static class BridgeServer
             return Error(reqId, ErrorText(ex));
         }
     }
+
+    private static string Success(string? id, object result, object? target = null) =>
+        JsonSerializer.Serialize(new { id, ok = true, result, target }, Json.Out);
 
     private static string Error(string? id, string message) =>
         JsonSerializer.Serialize(new { id, ok = false, error = message });
