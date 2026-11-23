@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "server"))
 from bridge_client import call  # noqa: E402
 import watergems  # noqa: E402
 
-WATER = Path.home() / "Desktop" / "CIVIL 3D MCP" / "water network"
+WATER = Path(__file__).resolve().parents[2] / "water network"
 OPTIONS = {
     "path": str(WATER / "Output from water model.xlsx"),
     "valve_layer": "Gate-Valve", "service_layers": ["WATER-63", "WATER-25mm"], "hydrant_layer": "FIRE FITTING",
@@ -22,36 +22,51 @@ def check(name, ok):
     print(f"{RESULTS[name]:5} {name}", flush=True)
 
 
-info = call("get_drawing_info")
-name = info["name"]
-if "watergems" not in name.lower() and not name.lower().startswith("pl15-21-wyte-wtr-pln"):
-    raise SystemExit(f"Refusing to run on '{name}': open PL15-21-WYTE-WTR-PLN.dwg (it is saved under a new name first).")
-if "watergems" not in name.lower():
-    copy = WATER / "PL15-21-WYTE-WTR-PLN - WaterGEMS import.dwg"
-    saved = call("edit", {"operations": [{"op": "drawing_save", "path": str(copy), "overwrite": True}],
-                          "target": info["target"], "request_id": str(uuid.uuid4())}, timeout=300)
-    print(json.dumps(saved, indent=1))
+def working_target():
+    source = (WATER / "PL15-21-WYTE-WTR-PLN.dwg").resolve()
+    copy = source.with_name(source.stem + " - WaterGEMS import.dwg")
     info = call("get_drawing_info")
-    check("working on the copy", "watergems" in info["name"].lower())
+    active = Path(info["path"]).resolve()
+    if active == source:
+        saved = call("edit", {"operations": [{"op": "drawing_save", "path": str(copy), "overwrite": True}],
+                              "target": info["target"], "request_id": str(uuid.uuid4())}, timeout=300)
+        if not saved.get("applied") or saved.get("afterCommitSucceeded") is False or saved.get("warnings"):
+            raise SystemExit(f"Save As failed. Import stopped: {saved}")
+        info = call("get_drawing_info", {"target": info["target"]})
+    if Path(info["path"]).resolve() != copy or not copy.is_file():
+        raise SystemExit(f"Import stopped. The active drawing must be the test copy at {copy}.")
+    return info["target"]
 
-target = info["target"]
-report = watergems.check({**OPTIONS, "target": target})
-print(json.dumps(report, indent=1), flush=True)
-check("export is ready", report.get("ready") is True)
 
-result = watergems.build({**OPTIONS, "target": target, "request_id": str(uuid.uuid4())})
-print(json.dumps(result, indent=1), flush=True)
-check("built", result.get("built") is True)
-nets = call("list_pressure_networks", {"target": target}).get("pressureNetworks")
-print(json.dumps(nets, indent=1)[:3000])
-pipes = call("list_pressure_pipes", {"network_name": "Water", "limit": 1000, "target": target})
-pipe_list = pipes.get("pipes", [])
-check("all planned pipes exist", len(pipe_list) == result.get("partsPlaced", {}).get("pipe"))
-named = {p.get("name") for p in pipe_list}
-check("WaterGEMS pipe names kept", all(p["label"] in named or f"{p['label']}.1" in named for p in watergems.read(OPTIONS)["pipes"]))
-views = [v["name"] for v in call("list_profile_views", {"target": target})["profileViews"]]
-check("a profile view per main", all(f"{m['name']} - Profile" in views for m in result.get("mains", [])) and result.get("mains"))
-print("\nSUMMARY")
-for k, v in RESULTS.items():
-    print(f"{v:5} {k}")
-print("ALL PASS" if all(v == "PASS" for v in RESULTS.values()) else "SOME FAILED")
+def main():
+    target = working_target()
+    report = watergems.check({**OPTIONS, "target": target})
+    print(json.dumps(report, indent=1), flush=True)
+    check("export is ready", report.get("ready") is True)
+
+    if not report.get("ready"):
+        raise SystemExit("Input checks failed. Import stopped.")
+
+    result = watergems.build({**OPTIONS, "target": target, "request_id": str(uuid.uuid4())})
+    print(json.dumps(result, indent=1), flush=True)
+    check("built", result.get("built") is True)
+    nets = call("list_pressure_networks", {"target": target}).get("pressureNetworks")
+    print(json.dumps(nets, indent=1)[:3000])
+    pipes = call("list_pressure_pipes", {"network_name": "Water", "limit": 1000, "target": target})
+    pipe_list = pipes.get("pipes", [])
+    check("all planned pipes exist", len(pipe_list) == result.get("partsPlaced", {}).get("pipe"))
+    named = {p.get("name") for p in pipe_list}
+    check("WaterGEMS pipe names kept", all(p["label"] in named or f"{p['label']}.1" in named for p in watergems.read(OPTIONS)["pipes"]))
+    views = [v["name"] for v in call("list_profile_views", {"target": target})["profileViews"]]
+    check("a profile view per main", all(f"{m['name']} - Profile" in views for m in result.get("mains", [])) and result.get("mains"))
+    print("\nSUMMARY")
+    for k, v in RESULTS.items():
+        print(f"{v:5} {k}")
+    print("ALL PASS" if all(v == "PASS" for v in RESULTS.values()) else "SOME FAILED")
+
+    if "FAIL" in RESULTS.values():
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

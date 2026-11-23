@@ -47,6 +47,7 @@ DEFAULTS: dict[str, Any] = {
     "valve_layer": None, "hydrant_layer": None, "cad_pipe_layers": [], "profile_view_gap": 30.0,
     "pipe_label_style": "WaterGEMS Pipe", "valve_label_style": "WaterGEMS Valve", "label_height_mm": 1.8,
     "alignment_layer": "WATER-ALIGNMENT", "alignment_label_set": "_No Labels", "profile_view_style": "Profile View",
+    "band_set": "auto",       # profile view band set; auto = Standard, else an Elevations band set
 }
 
 # --------------------------------------------------------------------------- reading the export
@@ -744,7 +745,8 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
              "description": f"Water main {chain[0]} to {chain[-1]}", "layer": o["alignment_layer"]},
             {"op": "profile_create", "alignment": name, "name": f"{name} - Ground", "pvis": [[s, nodes[k]["ground"]] for s, k in zip(st, chain)]},
             {"op": "profile_view_create", "alignment": name, "name": f"{name} - Profile", "at": [origin[0], origin[1] - i * 10.0],
-             **({"style": o["profile_view_style"]} if o["profile_view_style"] else {})},
+             **({"style": o["profile_view_style"]} if o["profile_view_style"] else {}),
+             **({"band_set": o["band_set"]} if o.get("band_set") else {})},
             {"op": "profile_view_add_parts", "profile_view": f"{name} - Profile", "handles": part_handles},
         ]
     if lines:

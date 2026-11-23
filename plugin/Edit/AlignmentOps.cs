@@ -103,10 +103,78 @@ internal static class AlignmentOps
         var al = FindAlignment(c.Civ, c.Tr, NeedStr(p, "alignment"));
         string name = StrParam(p, "name") ?? al.Name + " - Profile View";
         var style = Styles.Id(c.Civ.Styles.ProfileViewStyles, StrParam(p, "style"), "profile view style");
-        var id = CivilDb.ProfileView.Create(al.ObjectId, NeedPt(p, "at", "profile_view_create"), name,
-            Styles.Id(c.Civ.Styles.ProfileViewBandSetStyles, StrParam(p, "band_set"), "profile view band set"), style);
-        var pv = (CivilDb.ProfileView)c.Tr.GetObject(id, OpenMode.ForRead);
-        return new { profileView = pv.Name, handle = H(id), alignment = al.Name, style = Styles.NameOf(c.Tr, style), profiles = al.GetProfileIds().Count };
+        string? bandName = StrParam(p, "band_set");
+        var bandSet = BandSetFor(c, bandName);
+        var id = CivilDb.ProfileView.Create(al.ObjectId, NeedPt(p, "at", "profile_view_create"), name, bandSet, style);
+        var pv = (CivilDb.ProfileView)c.Tr.GetObject(id, OpenMode.ForWrite);
+        var bands = FillBandData(c, pv, al);
+        if (bands.Count == 0 && bandName != null)
+            c.Warn($"profile_view_create: '{pv.Name}' has no bands (band set '{Styles.NameOf(c.Tr, bandSet)}' is empty). Pass band_set, or add bands with profile_view_bands.");
+        return new { profileView = pv.Name, handle = H(id), alignment = al.Name, style = Styles.NameOf(c.Tr, style),
+                     bandSet = Styles.NameOf(c.Tr, bandSet), bands, profiles = al.GetProfileIds().Count };
+    }
+
+    /// <summary>
+    /// The band set to use: the one named; with none named, 'Standard' (or the first set); with "auto", 'Standard'
+    /// when it has bands, else the band set with "Elevation" in its name and the fewest bands, else the first with any. A template's default can be an empty set, which gives
+    /// a profile view with no bands at all.
+    /// </summary>
+    internal static ObjectId BandSetFor(EditContext c, string? name)
+    {
+        var sets = c.Civ.Styles.ProfileViewBandSetStyles;
+        if (!string.Equals(name, "auto", StringComparison.OrdinalIgnoreCase)) return Styles.Id(sets, name, "profile view band set");
+        int Count(ObjectId id)
+        {
+            var set = (CivilStyles.ProfileViewBandSetStyle)c.Tr.GetObject(id, OpenMode.ForRead);
+            return set.GetBottomBandSetItems().Count + set.GetTopBandSetItems().Count;
+        }
+        try { var standard = sets[Styles.StandardStyle]; if (Count(standard) > 0) return standard; } catch { /* no Standard set */ }
+        // Prefer a set that writes elevations (Civil 3D's metric template has no 'Standard' set, and its first set,
+        // 'Stations Only', shows nothing but stations).
+        ObjectId best = ObjectId.Null, any = ObjectId.Null;
+        int bestCount = int.MaxValue;
+        for (int i = 0; i < sets.Count; i++)
+        {
+            int n = Count(sets[i]);
+            if (n == 0) continue;
+            if (any.IsNull) any = sets[i];
+            string setName = Styles.NameOf(c.Tr, sets[i]) ?? "";
+            if (setName.IndexOf("Elevation", StringComparison.OrdinalIgnoreCase) >= 0 && n < bestCount) { best = sets[i]; bestCount = n; }
+        }
+        if (!best.IsNull) return best;
+        return any.IsNull ? Styles.Id(sets, null, "profile view band set") : any;
+    }
+
+    /// <summary>
+    /// Gives every profile data band without a profile the alignment's first profile (the ground) and, when there is
+    /// one, its second profile as profile 2, so the band shows values instead of an empty strip. Returns the bands now on the view.
+    /// </summary>
+    internal static List<object> FillBandData(EditContext c, CivilDb.ProfileView pv, CivilDb.Alignment al)
+    {
+        var report = new List<object>();
+        var profiles = al.GetProfileIds();
+        var first = profiles.Count > 0 ? profiles[0] : ObjectId.Null;
+        foreach (var location in new[] { Autodesk.Civil.BandLocationType.Bottom, Autodesk.Civil.BandLocationType.Top })
+        {
+            var items = location == Autodesk.Civil.BandLocationType.Bottom ? pv.Bands.GetBottomBandItems() : pv.Bands.GetTopBandItems();
+            bool changed = false;
+            for (int i = 0; i < items.Count; i++)
+            {
+                var item = items[i];
+                if (item.BandType == Autodesk.Civil.BandType.ProfileData && item.Profile1Id.IsNull && !first.IsNull)
+                {
+                    item.Profile1Id = first;
+                    if (item.Profile2Id.IsNull && profiles.Count > 1) item.Profile2Id = profiles[1];
+                    changed = true;
+                }
+                report.Add(new { location = location.ToString().ToLowerInvariant(), type = item.BandType.ToString(),
+                                 style = Styles.NameOf(c.Tr, item.BandStyleId) });
+            }
+            if (!changed) continue;
+            if (location == Autodesk.Civil.BandLocationType.Bottom) pv.Bands.SetBottomBandItems(items);
+            else pv.Bands.SetTopBandItems(items);
+        }
+        return report;
     }
 
     private static object ProfileViewAddParts(EditContext c, JsonElement p)

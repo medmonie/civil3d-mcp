@@ -20,12 +20,14 @@ Where the profiles come from:
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
 from typing import Any
 from uuid import UUID, uuid5
 
-from bridge_client import EDIT_TIMEOUT, call, drawing_target, edit_request_id
+from bridge_client import BridgeError, EDIT_TIMEOUT, call, drawing_target, edit_request_id
 
 STANDARD_SCALES = [100, 200, 250, 300, 400, 500, 600, 750, 1000, 1250, 1500, 2000, 2500, 3000, 4000, 5000, 7500, 10000]
 MAX_OPS = 500
@@ -113,7 +115,9 @@ def _unit_mm(target: Any) -> float:
 def _fit_scale(window: list[float], vp: dict[str, Any], unit_mm: float, scales: list[int]) -> int:
     """Smallest standard 1:N at which the window fits the viewport."""
     w, h = window[2] - window[0], window[3] - window[1]
-    need = max(w * unit_mm / vp["width"], h * unit_mm / vp["height"])
+    twist = math.radians(vp.get("twistDeg", 0))
+    c, s = abs(math.cos(twist)), abs(math.sin(twist))
+    need = max((w*c + h*s) * unit_mm / vp["width"], (w*s + h*c) * unit_mm / vp["height"])
     return next((n for n in scales if n >= need), int(math.ceil(need)))
 
 
@@ -136,7 +140,20 @@ def plan_sheets(params: dict[str, Any], target: Any) -> dict[str, Any]:
     t = template(params, target)
     unit_mm = _unit_mm(target)
     profile_w, profile_h = _model_size(t["profile"])
-    max_length = float(params.get("max_length") or 500)
+    max_length = float(params.get("max_length", 500))
+    if not math.isfinite(max_length) or max_length <= 0:
+        raise ValueError("max_length must be positive and finite.")
+    twist = math.radians(t["profile"].get("twistDeg", 0))
+    cosine, sine = abs(math.cos(twist)), abs(math.sin(twist))
+
+    def available_span(height):
+        widths = [max_length]
+        if cosine > 1e-9:
+            widths.append((profile_w - height * sine) / cosine)
+        if sine > 1e-9:
+            widths.append((profile_h - height * cosine) / sine)
+        return min(widths)
+
     mode = params.get("mode") or "auto"
     notes: list[str] = []
     views = [v for v in call("list_profile_views", {"target": target}).get("profileViews", []) if _box(v.get("extents"))]
@@ -164,19 +181,25 @@ def plan_sheets(params: dict[str, Any], target: Any) -> dict[str, Any]:
         for v in views:
             b = _box(v["extents"])
             w, h = b[2] - b[0], b[3] - b[1]
-            if h > profile_h:
+            span = available_span(h)
+            if span <= 0:
+                raise ValueError(f"{v['name']}: the rotated profile viewport cannot fit this view at its template scale.")
+            if h > profile_h and sine < 1e-9:
                 notes.append(f"{v['name']}: {h:.0f} high, the profile viewport shows {profile_h:.0f}; its top or bottom is cut off.")
-            if w > max_length:
+            if w > span:
                 flush()
-                parts = math.ceil(w / max_length)
+                parts = math.ceil(w / span)
                 for k in range(parts):
-                    x0 = b[0] + k * max_length
-                    x1 = min(b[2], x0 + max_length)
-                    sheets.append({"profileCenter": [(x0 + x1) / 2, (b[1] + b[3]) / 2], "lines": [v["alignment"]],
+                    x0 = b[0] + k * span
+                    x1 = min(b[2], x0 + span)
+                    segment = call("profile_sheet_window", {"alignment_name": v["alignment"], "profile_view": v["name"],
+                                                            "x_min": x0, "x_max": x1, "target": target})
+                    sheets.append({"stationRange": segment["stationRange"], "planWindow": segment["window"],
+                                   "profileCenter": [(x0 + x1) / 2, (b[1] + b[3]) / 2], "lines": [v["alignment"]],
                                    "profileViews": [f"{v['name']} ({k + 1}/{parts})"]})
                 continue
             trial = _union([_box(g["extents"]) for g in group] + [b]) if group else b
-            if group and (trial[2] - trial[0] > min(profile_w, max_length) or trial[3] - trial[1] > profile_h):
+            if group and (trial[2] - trial[0] > available_span(trial[3] - trial[1]) or trial[3] - trial[1] > profile_h):
                 flush()
             group.append(v)
         flush()
@@ -230,18 +253,12 @@ def check(params: dict[str, Any]) -> dict[str, Any]:
     return {
         "mode": p["mode"], "template": f"{t['path']} / {t['layout']}", "profileViewport": p["profileViewport"],
         "found": {k: bool(t[k]) for k in ("plan", "profile", "key", "header", "label", "scaleBar")} | {"listLines": len(t["lines"]), "keyBox": bool(t["marker"])},
-        "sheets": [{k: s[k] for k in ("layout", "label", "lines", "planScale")} | {"profileViews": s.get("profileViews")} for s in p["sheets"]],
+        "sheets": [{k: s[k] for k in ("layout", "label", "lines", "planScale")} | {k: s[k] for k in ("profileViews", "stationRange") if k in s} for s in p["sheets"]],
         "notes": p["notes"],
     }
 
 
 # --------------------------------------------------------------------------- build
-
-def _edit(target: Any, request_id: str, ops: list[dict[str, Any]]) -> dict[str, Any]:
-    if len(ops) > MAX_OPS:
-        raise ValueError(f"Too many operations in one batch ({len(ops)}); make fewer sheets at a time.")
-    return call("edit", {"operations": ops, "target": target, "request_id": request_id}, timeout=EDIT_TIMEOUT)
-
 
 def _failed(reply: dict[str, Any]) -> str:
     return str(reply.get("error") or reply.get("reason") or "rolled back")
@@ -251,107 +268,168 @@ def _near(a: list[float], b: list[float], tol: float = 0.5) -> bool:
     return abs(a[0] - b[0]) <= tol and abs(a[1] - b[1]) <= tol
 
 
+# Leave room for viewport, label, key-plan and scale-bar operations in the first transaction.
+LABEL_BATCH = 400
+
+
+def _line_ops(t, s, start, stop):
+    if not t["lines"]:
+        return []
+    g = t["lines"][0]["geometry"]
+    return [{"op": "draw_text", "layout": s["layout"], "layer": t["lineLayer"], "text": f"%%U{name}",
+             "at": [g["at"][0], g["at"][1] - i * t["lineSpacing"], 0], "height": g.get("height", 3)}
+            for i, name in enumerate(s["lines"][start:stop], start)]
+
+
+def _sheet_content(t, s, target, unit_mm, notes_out):
+    edits = []
+    tplan_scale = unit_mm / t["plan"]["customScale"]
+    vps = call("list_viewports", {"layout": s["layout"], "target": target}).get("viewports", [])
+    ents = call("list_entities", {"layout": s["layout"], "limit": 2000, "target": target}).get("entities", [])
+    role = {}
+    for r in ("plan", "profile", "key"):
+        if t.get(r):
+            matches = [v for v in vps if _near(v["at"], t[r]["at"])]
+            if len(matches) != 1:
+                raise ValueError(f"Expected one {r} viewport on the copied layout, found {len(matches)}.")
+            role[r] = matches[0]
+    if len({v["handle"] for v in role.values()}) != len(role):
+        raise ValueError("Template viewport roles resolve to the same viewport.")
+    edits.append({"op": "viewport_set", "handle": role["profile"]["handle"], "view_center": s["profileCenter"], "on": True})
+    edits.append({"op": "viewport_set", "handle": role["plan"]["handle"], "view_center": s["planCenter"], "scale": f"1:{s['planScale']}", "on": True})
+
+    def find(sample: dict[str, Any] | None) -> list[dict[str, Any]]:
+        if not sample:
+            return []
+        g = sample["geometry"] or {}
+        if sample["type"] in ("TEXT", "MTEXT"):
+            # justified text gets its insertion point recomputed when copied: match layer and content, then nearest
+            same = [e for e in ents if e["type"] == sample["type"] and e["layer"] == sample["layer"]
+                    and (e.get("geometry") or {}).get("text") == g.get("text")]
+            at = g.get("at") or [0, 0]
+            return sorted(same, key=lambda e: abs(e["geometry"]["at"][0] - at[0]) + abs(e["geometry"]["at"][1] - at[1]))[:1] \
+                if same and _near(min(same, key=lambda e: abs(e["geometry"]["at"][0] - at[0]) + abs(e["geometry"]["at"][1] - at[1]))["geometry"]["at"], at, 5.0) else []
+        at = g.get("at") or (g.get("vertices") or [[None, None]])[0]
+        return [e for e in ents if e["type"] == sample["type"] and e["layer"] == sample["layer"]
+                and at[0] is not None and _near((e.get("geometry") or {}).get("at") or ((e.get("geometry") or {}).get("vertices") or [[1e99, 1e99]])[0], at, 0.01)]
+
+    # list of lines: erase the template's, write this sheet's under the header
+    old = [h["handle"] for tl in t["lines"] for h in find(tl)]
+    if old:
+        edits.append({"op": "entity_erase", "handles": old})
+    edits.extend(_line_ops(t, s, 0, LABEL_BATCH))
+    # sheet label
+    for lab in find(t["label"]):
+        text = re.sub(r"\(\s*\d+\s*/\s*\d+\s*\)", s["label"], lab["geometry"]["text"])
+        edits.append({"op": "text_set", "handle": lab["handle"], "text": text})
+    # key-plan box: map the new plan area onto the key plan
+    if t.get("key") and t["marker"] and role.get("key"):
+        k = t["key"]
+        to_paper = lambda x, y: [k["at"][0] + (x - k["viewCenter"][0]) * k["customScale"], k["at"][1] + (y - k["viewCenter"][1]) * k["customScale"]]
+        pw, ph = t["plan"]["width"] * s["planScale"] / unit_mm, t["plan"]["height"] * s["planScale"] / unit_mm
+        new0 = to_paper(s["planCenter"][0] - pw / 2, s["planCenter"][1] - ph / 2)
+        vs = t["marker"][0]["geometry"]["vertices"]
+        old0 = [min(v[0] for v in vs), min(v[1] for v in vs)]
+        old_w = max(v[0] for v in vs) - old0[0]
+        new_w = pw * k["customScale"]
+        handles = [h["handle"] for m in t["marker"] for h in (find(m) if m["type"] == "LWPOLYLINE" else
+                   [e for e in ents if e["type"] == "HATCH" and e["layer"] == m["layer"]
+                    and abs((e["geometry"] or {}).get("area", -1) - m["geometry"]["area"]) <= 0.01])]
+        new_h = ph * k["customScale"]
+        kx0, ky0 = k["at"][0] - k["width"] / 2, k["at"][1] - k["height"] / 2
+        inside = kx0 <= new0[0] and ky0 <= new0[1] and new0[0] + new_w <= kx0 + k["width"] and new0[1] + new_h <= ky0 + k["height"]
+        if handles and old_w > 0 and inside:
+            edits.append({"op": "entity_scale", "handles": handles, "base": old0, "factor": new_w / old_w})
+            edits.append({"op": "entity_move", "handles": handles, "dx": new0[0] - old0[0], "dy": new0[1] - old0[1]})
+        elif handles:
+            notes_out.append(f"{s['layout']}: the plan area is outside the key plan (the key plan shows another area), so the key-plan box was left where it is.")
+    # scale bar drawn for the template's plan scale
+    if t["scaleBar"] and abs(s["planScale"] - tplan_scale) > 0.5:
+        for b in find(t["scaleBar"]):
+            edits.append({"op": "entity_scale", "handles": [b["handle"]], "base": b["geometry"]["at"][:2],
+                          "factor": tplan_scale / s["planScale"]})
+    return edits
+
+
+def _stage(target, stage_id, workflow, operations):
+    # A lost reply or restarted MCP client can resume against the bridge's session ledger.
+    # Only a confirmed, unapplied transaction gets a fresh attempt ID on a subsequent call.
+    while True:
+        identity = {"target": target, "request_id": str(stage_id)}
+        status = call("get_edit_status", identity)
+        state = status["state"]
+        if state == "unknown":
+            break
+        if status.get("workflow") != workflow:
+            raise ValueError("This request_id belongs to a different sheet plan. Use a new ID for changed inputs.")
+        if state == "pending":
+            raise ValueError("The previous edit is still pending. Resume with the same request_id.")
+        if state == "error":
+            break
+        if state != "completed" or status.get("applied") is None:
+            raise ValueError("The previous edit outcome is unknown. Check the drawing before continuing.")
+        if status["applied"]:
+            return status.get("result") or {"applied": True, "afterCommitSucceeded": status.get("afterCommitSucceeded")}
+        stage_id = uuid5(stage_id, "retry")
+    ops = operations()
+    if not 0 < len(ops) <= MAX_OPS:
+        raise ValueError(f"Sheet transaction has {len(ops)} operations (limit {MAX_OPS}).")
+    reply = call("edit", {**identity, "workflow": workflow, "operations": ops}, timeout=EDIT_TIMEOUT)
+    if reply.get("state") == "pending":
+        raise ValueError("The previous edit is still pending. Resume with the same request_id.")
+    if not reply.get("applied"):
+        raise ValueError(_failed(reply))
+    return reply
+
+
 def build(params: dict[str, Any]) -> dict[str, Any]:
     target = drawing_target(params)
-    request_id = edit_request_id(params)
+    root = UUID(edit_request_id(params))
     p = plan_sheets(params, target)
     t, sheets = p["template"], p["sheets"]
     if not sheets:
         return {"built": False, "note": "No sheets to make.", "notes": p["notes"]}
-    existing = {l["name"] for l in call("list_layouts", {"target": target})["layouts"]}
-    clash = [s["layout"] for s in sheets if s["layout"] in existing]
+    workflow = hashlib.sha256(json.dumps([params, p], sort_keys=True, allow_nan=False).encode()).hexdigest()
     replace = params.get("if_exists") == "replace"
-    if clash and not replace:
-        raise ValueError(f"Layouts already exist: {', '.join(clash)}. Pass if_exists: 'replace', or another first_sheet / layout_prefix.")
+    ids = [root if i == 0 else uuid5(root, f"layout-{i}") for i in range(len(sheets))]
+    existing = {l["name"].casefold() for l in call("list_layouts", {"target": target})["layouts"]}
+    for s, copy_id in zip(sheets, ids):
+        if s["layout"].casefold() in existing and not replace:
+            status = call("get_edit_status", {"target": target, "request_id": str(copy_id)})
+            if status.get("workflow") != workflow:
+                raise ValueError(f"Layout '{s['layout']}' already exists. Choose another name or if_exists: replace.")
 
-    # stage 1: the layouts, copied from the template
-    ops = [{"op": "layout_from_template", "path": t["path"], "layout": t["layout"], "name": s["layout"],
-            **({"if_exists": "replace"} if replace else {})} for s in sheets]
-    first = _edit(target, request_id, ops)
-    if not first.get("applied"):
-        return {"built": False, "layoutsCreated": False, "error": _failed(first), "reply": first}
-    stages: dict[str, Any] = {"layouts": "committed"}
-
-    # stage 2: each sheet's viewports, texts, key-plan box and scale bar
-    unit_mm = p["unitMm"]
-    tplan_scale = unit_mm / t["plan"]["customScale"]
-    edits: list[dict[str, Any]] = []
-    built: list[dict[str, Any]] = []
-    notes_out: list[str] = list(p["notes"])
-    for s in sheets:
-        vps = call("list_viewports", {"layout": s["layout"], "target": target}).get("viewports", [])
-        ents = call("list_entities", {"layout": s["layout"], "limit": 2000, "target": target}).get("entities", [])
-        role = {r: next((v for v in vps if _near(v["at"], t[r]["at"])), None) for r in ("plan", "profile", "key") if t.get(r)}
-        if not role.get("plan") or not role.get("profile"):
-            stages[s["layout"]] = "viewports of the template not found on the new layout"
-            continue
-        edits.append({"op": "viewport_set", "handle": role["profile"]["handle"], "view_center": s["profileCenter"], "on": True})
-        edits.append({"op": "viewport_set", "handle": role["plan"]["handle"], "view_center": s["planCenter"], "scale": f"1:{s['planScale']}", "on": True})
-
-        def find(sample: dict[str, Any] | None) -> list[dict[str, Any]]:
-            if not sample:
-                return []
-            g = sample["geometry"] or {}
-            if sample["type"] in ("TEXT", "MTEXT"):
-                # justified text gets its insertion point recomputed when copied: match layer and content, then nearest
-                same = [e for e in ents if e["type"] == sample["type"] and e["layer"] == sample["layer"]
-                        and (e.get("geometry") or {}).get("text") == g.get("text")]
-                at = g.get("at") or [0, 0]
-                return sorted(same, key=lambda e: abs(e["geometry"]["at"][0] - at[0]) + abs(e["geometry"]["at"][1] - at[1]))[:1] \
-                    if same and _near(min(same, key=lambda e: abs(e["geometry"]["at"][0] - at[0]) + abs(e["geometry"]["at"][1] - at[1]))["geometry"]["at"], at, 5.0) else []
-            at = g.get("at") or (g.get("vertices") or [[None, None]])[0]
-            return [e for e in ents if e["type"] == sample["type"] and e["layer"] == sample["layer"]
-                    and at[0] is not None and _near((e.get("geometry") or {}).get("at") or ((e.get("geometry") or {}).get("vertices") or [[1e99, 1e99]])[0], at, 0.01)]
-
-        # list of lines: erase the template's, write this sheet's under the header
-        old = [h["handle"] for tl in t["lines"] for h in find(tl)]
-        if old:
-            edits.append({"op": "entity_erase", "handles": old})
-        if t["lines"]:
-            g = t["lines"][0]["geometry"]
-            for i, name in enumerate(s["lines"]):
-                edits.append({"op": "draw_text", "layout": s["layout"], "layer": t["lineLayer"], "text": f"%%U{name}",
-                              "at": [g["at"][0], g["at"][1] - i * t["lineSpacing"], 0], "height": g.get("height", 3)})
-        # sheet label
-        for lab in find(t["label"]):
-            text = re.sub(r"\(\s*\d+\s*/\s*\d+\s*\)", s["label"], lab["geometry"]["text"])
-            edits.append({"op": "text_set", "handle": lab["handle"], "text": text})
-        # key-plan box: map the new plan area onto the key plan
-        if t.get("key") and t["marker"] and role.get("key"):
-            k = t["key"]
-            to_paper = lambda x, y: [k["at"][0] + (x - k["viewCenter"][0]) * k["customScale"], k["at"][1] + (y - k["viewCenter"][1]) * k["customScale"]]
-            pw, ph = t["plan"]["width"] * s["planScale"] / unit_mm, t["plan"]["height"] * s["planScale"] / unit_mm
-            new0 = to_paper(s["planCenter"][0] - pw / 2, s["planCenter"][1] - ph / 2)
-            vs = t["marker"][0]["geometry"]["vertices"]
-            old0 = [min(v[0] for v in vs), min(v[1] for v in vs)]
-            old_w = max(v[0] for v in vs) - old0[0]
-            new_w = pw * k["customScale"]
-            handles = [h["handle"] for m in t["marker"] for h in (find(m) if m["type"] == "LWPOLYLINE" else
-                       [e for e in ents if e["type"] == "HATCH" and e["layer"] == m["layer"]
-                        and abs((e["geometry"] or {}).get("area", -1) - m["geometry"]["area"]) <= 0.01])]
-            new_h = ph * k["customScale"]
-            kx0, ky0 = k["at"][0] - k["width"] / 2, k["at"][1] - k["height"] / 2
-            inside = kx0 <= new0[0] and ky0 <= new0[1] and new0[0] + new_w <= kx0 + k["width"] and new0[1] + new_h <= ky0 + k["height"]
-            if handles and old_w > 0 and inside:
-                edits.append({"op": "entity_scale", "handles": handles, "base": old0, "factor": new_w / old_w})
-                edits.append({"op": "entity_move", "handles": handles, "dx": new0[0] - old0[0], "dy": new0[1] - old0[1]})
-            elif handles:
-                notes_out.append(f"{s['layout']}: the plan area is outside the key plan (the key plan shows another area), so the key-plan box was left where it is.")
-        # scale bar drawn for the template's plan scale
-        if t["scaleBar"] and abs(s["planScale"] - tplan_scale) > 0.5:
-            for b in find(t["scaleBar"]):
-                edits.append({"op": "entity_scale", "handles": [b["handle"]], "base": b["geometry"]["at"][:2],
-                              "factor": tplan_scale / s["planScale"]})
-        built.append({"layout": s["layout"], "label": s["label"], "lines": s["lines"], "planScale": f"1:{s['planScale']}",
-                      "profileViews": s.get("profileViews")})
-
-    second = _edit(target, str(uuid5(UUID(request_id), "pp-sheets-content")), edits) if edits else {"applied": True}
-    stages["sheet content"] = "committed" if second.get("applied") else "rolled back: " + _failed(second)
-    warnings = first.get("warnings", []) + second.get("warnings", [])
+    stages = {s["layout"]: "pending" for s in sheets}
+    built, copied, warnings = [], [], []
+    notes = list(p["notes"])
+    failure = None
+    for s, copy_id in zip(sheets, ids):
+        name = s["layout"]
+        try:
+            copy = {"op": "layout_from_template", "path": t["path"], "layout": t["layout"], "name": name}
+            if replace:
+                copy["if_exists"] = "replace"
+            first = _stage(target, copy_id, workflow, lambda: [copy])
+            copied.append(name)
+            warnings.extend(first.get("warnings", []))
+            if first.get("afterCommitSucceeded") is False:
+                raise ValueError("Layout copied, but its after-commit work failed. Check the layout and xrefs.")
+            second = _stage(target, uuid5(copy_id, "content"), workflow,
+                            lambda: _sheet_content(t, s, target, p["unitMm"], notes))
+            warnings.extend(second.get("warnings", []))
+            if t["lines"]:
+                for start in range(LABEL_BATCH, len(s["lines"]), MAX_OPS):
+                    _stage(target, uuid5(copy_id, f"labels-{start}"), workflow,
+                           lambda: _line_ops(t, s, start, start + MAX_OPS))
+            stages[name] = "committed"
+            built.append({"layout": name, "label": s["label"], "lines": s["lines"], "planScale": f"1:{s['planScale']}",
+                          "profileViews": s.get("profileViews"), **({"stationRange": s["stationRange"]} if "stationRange" in s else {})})
+        except (BridgeError, ValueError) as exc:
+            failure = f"{name}: {exc}"
+            stages[name] = str(exc)
+            break
     if t["scaleBar"]:
         warnings.append("The scale bar is resized for each plan scale; check any scale text drawn inside the scale bar block.")
-    return {
-        "built": bool(second.get("applied")), "layoutsCreated": True, "stages": stages, "mode": p["mode"],
-        "template": f"{t['path']} / {t['layout']}", "sheets": built, "notes": notes_out, "warnings": warnings,
-        **({"error": _failed(second)} if not second.get("applied") else {}),
-    }
+    return {"built": len(built) == len(sheets), "layoutsCreated": bool(copied), "copiedLayouts": copied,
+            "stages": stages, "mode": p["mode"], "template": f"{t['path']} / {t['layout']}", "sheets": built,
+            "notes": notes, "warnings": warnings, **({"error": failure} if failure else {})}

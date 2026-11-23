@@ -43,6 +43,7 @@ internal static class Registry
         Read("alignment_point_to_station", AlignmentRead.PointToStation);
         Read("list_profiles", AlignmentRead.ListProfiles);
         Read("get_profile_elevation", AlignmentRead.GetProfileElevation);
+        Read("profile_sheet_window", AlignmentRead.ProfileSheetWindow);
         Read("list_profile_views", AlignmentRead.ListProfileViews);
         Read("list_sample_lines", AlignmentRead.ListSampleLines);
         Read("list_section_views", AlignmentRead.ListSectionViews);

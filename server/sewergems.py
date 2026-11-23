@@ -423,6 +423,7 @@ PRESENTATION: dict[str, Any] = {
     "alignment_layer": "SEWER-ALIGNMENT",           # turned off: the pipes already show the route
     "profile_view_style": "Profile View",
     "band_table": True,                             # the LISP-style table under each profile view
+    "band_set": None,                               # Civil 3D band set on the views (name or "auto"); default Standard
 }
 
 
@@ -653,6 +654,7 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
         {"op": "pipe_network_add", "network": net, "structures": structures, "pipes": pipe_ops},
     ]
     style = params.get("profile_view_style") or (options["profile_view_style"] if styled else None)
+    band_set = params.get("band_set") or options.get("band_set")
     for i, line in enumerate(lines):
         chain = line["nodes"]
         st = stations(nodes, chain)
@@ -663,7 +665,8 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
             {"op": "profile_create", "alignment": name, "name": f"{name} - Ground",
              "pvis": [[s, nodes[k]["ground"]] for s, k in zip(st, chain)]},
             {"op": "profile_view_create", "alignment": name, "name": f"{name} - Profile",
-             "at": [origin[0], origin[1] - i * 10.0], **({"style": style} if style else {})},
+             "at": [origin[0], origin[1] - i * 10.0], **({"style": style} if style else {}),
+             **({"band_set": band_set} if band_set else {})},
             {"op": "profile_view_add_parts", "profile_view": f"{name} - Profile", "pipe_network": net,
              "structure_names": [_name(rename, k) for k in chain],
              "pipe_names": [f"P {_name(rename, p['start'])}" for p in line["pipes"]]},

@@ -70,7 +70,7 @@ internal static class Styles
     }
 
     /// <summary>The style Civil 3D templates use as their general-purpose default.</summary>
-    private const string StandardStyle = "Standard";
+    internal const string StandardStyle = "Standard";
 
     /// <summary>A style by name. Without a name: the style called "Standard" when there is one, otherwise the first.</summary>
     public static ObjectId Id(CivilStyles.StyleCollectionBase styles, string? name, string what)

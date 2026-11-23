@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.14.2
+
+- Profile views made by the WaterGEMS import get bands again. `profile_view_create` takes `band_set: "auto"` (the WaterGEMS default): 'Standard' when it has bands, otherwise the band set with "Elevation" in its name and the fewest bands (in Civil 3D's metric template: EG-FG Elevations and Stations). That template has no 'Standard' band set, so views fell back to its first set, 'Stations Only'. The reply lists the band set and the bands, and warns when a view still has none.
+- Profile data bands without a profile get the alignment's first profile (the ground), and its second profile when there is one, so they show values.
+- `profile_view_bands` takes `band_set` to put every band of a set on an existing profile view; use it to add bands to views made earlier.
+- SewerGEMS import takes `band_set` too (by default it keeps Standard and its drawn band table).
+- `tests\run_bands.bat` checks the band sets of the open drawing and, in a dry run, that new and existing profile views get bands.
+
+## 0.14.1
+
+- The WaterGEMS live test verifies the active DWG's full path after Save As and stops before importing if the save fails, produces a warning, or leaves the source active. The bridge reports post-commit failures separately from the drawing transaction.
+- Plan/profile sheets split at the smaller of the configured length and the available profile viewport width. Fitted plans use each split sheet's station interval, mapped through the Civil 3D profile view and alignment. Sheet previews and creation results include the interval.
+- Sheet creation reports success only when every requested layout has its required viewports and all content transactions committed. Results identify completed, interrupted and pending layouts.
+- Layouts are copied and filled one at a time. Long line lists are written in bounded transactions. Repeating the original request with the same UUID and drawing in the same bridge session resumes after a missing viewport, a rolled-back transaction or a lost reply. Changed plans require a new UUID.
+- Offline regression coverage includes narrow viewports, split-sheet plans, missing copied viewports, a 100-sheet run, 1,050 line labels on one layout, lost replies, and refusal to import into an unverified DWG.
+
 ## 0.14.0
 
 Plan and profile sheets from an office template, live-tested in Civil 3D 2027 on the Ridge ICD template

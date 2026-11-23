@@ -169,6 +169,30 @@ def main() -> None:
     took = time.perf_counter() - started
     assert lines and took < 10, took
     print(f"mains ok: {len(pipes)}-pipe looped grid planned in {took:.2f} s ({len(lines)} lines)")
+    from unittest.mock import patch
+    from tempfile import TemporaryDirectory
+    import watergems_live as live
+    with TemporaryDirectory() as tmp, patch.object(live, "WATER", Path(tmp)):
+        original = Path(tmp) / "PL15-21-WYTE-WTR-PLN.dwg"
+        copy = original.with_name(original.stem + " - WaterGEMS import.dwg")
+        copy.touch()
+        src = {"path": str(original), "target": {"drawing_id": "one"}}
+        dest = {**src, "path": str(copy)}
+        cases = ([src, {"applied": False}], [src, {"applied": True, "warnings": ["save failed"]}],
+                 [src, {"applied": True, "afterCommitSucceeded": False}], [src, {"applied": True}, src],
+                 [{**src, "path": str(Path(tmp) / "other WaterGEMS.dwg")}])
+        for responses in cases:
+            with patch.object(live, "call", side_effect=responses), patch.object(live.watergems, "build") as build:
+                try:
+                    live.main()
+                except SystemExit:
+                    pass
+                else:
+                    raise AssertionError("Expected an unverified copy to stop the import")
+                build.assert_not_called()
+        with patch.object(live, "call", side_effect=[src, {"applied": True}, dest]):
+            assert live.working_target() == src["target"]
+    print("live import guard ok: only the verified working copy passes")
     print("\nALL OK")
 
 

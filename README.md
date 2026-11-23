@@ -238,7 +238,7 @@ sheet: `layout_from_template` (your office template's layout with its title bloc
 
 ## 4. Features
 
-One tool, `civil3d(action, params)`: 47 read actions, 9 QA / help / import / sheet actions, and 90 edit operations inside the
+One tool, `civil3d(action, params)`: 48 read actions, 9 QA / help / import / sheet actions, and 90 edit operations inside the
 single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTIONS.md)** and by `action="help"`.
 
 ### Read (never changes the drawing)

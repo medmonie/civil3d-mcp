@@ -68,6 +68,8 @@ READ_GROUPS: dict[str, Group] = {
         "alignment_point_to_station": ("Station and offset of a point.", {"alignment_name": "", "x": "", "y": ""}),
         "list_profiles": ("Profiles: type, PVI count, station range, min/max elevation.", {"alignment_name?": "only this alignment"}),
         "get_profile_elevation": ("Elevation of a profile at a station.", {"alignment_name": "", "profile_name": "", "station": ""}),
+        "profile_sheet_window": ("Station range and enclosing plan window for part of a profile view.",
+                                 {"alignment_name": "", "profile_view": "", "x_min": "profile drawing X", "x_max": "profile drawing X"}),
         "list_profile_views": ("Profile views: alignment, style, station and elevation range, position in the drawing.", {}),
         "list_sample_lines": ("Sample line groups with the stations of their sample lines.", {"alignment_name?": "only this alignment"}),
         "list_section_views": ("Section views: alignment, sample line group, sample line, station.", {"limit?": "default 500"}),
@@ -138,7 +140,7 @@ PP_SHEETS_INPUT = {
     "sheets?": "rows mode: [{lines: [names], plan_window?: [xmin, ymin, xmax, ymax]}, ...] one entry per sheet",
     "row_spacing?": "rows mode: m between the profile rows of two sheets, default 500",
     "first_row_center?": "rows mode: [x, y] profile centre of the first sheet (default: the template's)",
-    "max_length?": "views mode: most profile length on one sheet, default 500 (longer views are split)",
+    "max_length?": "views mode: maximum span per sheet, default 500 drawing units, capped at the profile viewport width",
     "profile_views?": "views mode: only these profile views",
     "plan?": "fit (default: zoom to the sheet's alignments at a standard scale) | template (keep the template's plan area)",
     "plan_scales?": "allowed plan scales N of 1:N, default 100 ... 10000", "plan_margin?": "default 0.1 (10 %)",
@@ -167,7 +169,7 @@ LOCAL_ACTIONS: Group = {
                           "profile_view_gap?": "vertical gap between views, default 30",
                           "presentation?": "false to skip styling; or overrides of: pipe_style, structure_style, structure_label_style, "
                            "pipe_label_style, pipe_label_text, label_height_mm, alignment_label_set, profile_view_style, band_table",
-                           "profile_view_style?": "overrides the presentation setting", "dry_run?": "validate the core network, profiles, and styles transaction",
+                           "profile_view_style?": "overrides the presentation setting", "band_set?": "band set for the profile views: a name, or auto (Standard when it has bands, else an Elevations band set)", "dry_run?": "validate the core network, profiles, and styles transaction",
                            "finish_attempt?": "default 1. Increment only after the preceding finishing transaction is confirmed rolled back."}),
     "pp_sheets_plan": ("Plan and profile sheets from an office sheet template, without drawing: which profiles, lines, plan scale and "
                        "label each sheet gets, and what was found in the template (viewports, list of lines, label, key-plan box, scale bar).",
@@ -185,7 +187,7 @@ LOCAL_ACTIONS: Group = {
                          "material and size, then an alignment, ground profile and profile view per main. Needs edit permission.",
                          {**WATERGEMS_INPUT, "target": "from get_drawing_info", "request_id": "one UUID for the import",
                           "network?": "default 'Water'", "profile_views_at?": "[x,y], default 50 below the network",
-                          "profile_view_gap?": "default 30", "profile_view_style?": "default 'Profile View'",
+                          "profile_view_gap?": "default 30", "profile_view_style?": "default 'Profile View'", "band_set?": "default auto: Standard when it has bands, else an Elevations band set (e.g. EG-FG Elevations and Stations), or a name",
                           "dry_run?": "validate the network transaction only"}),
 }
 
@@ -363,7 +365,8 @@ EDIT_GROUPS: dict[str, Group] = {
                            {"alignment": "", "name": "", "pvis": "[[station, elevation], ...]", **PROFILE_STYLE}),
         "profile_from_surface": ("Create a surface (existing ground) profile.", {"alignment": "", "surface": "", "name": "", **PROFILE_STYLE}),
         "profile_view_create": ("Create a profile view of an alignment (shows all its profiles).",
-                                {"alignment": "", "at": "[x,y] lower-left insertion point", "name?": "", "style?": "", "band_set?": ""}),
+                                {"alignment": "", "at": "[x,y] lower-left insertion point", "name?": "", "style?": "",
+                                 "band_set?": "name, or auto (Standard when it has bands, else the band set with Elevation in its name; default: Standard or the first set)"}),
         "profile_view_add_parts": ("Show network parts in a profile view.",
                                    {"profile_view": "", "pipe_network?": "gravity network name", "pressure_network?": "", "handles?": "individual parts",
                                     "pipe_names?": "filter gravity pipes by name", "structure_names?": "filter gravity structures by name"}),
@@ -405,8 +408,10 @@ EDIT_GROUPS: dict[str, Group] = {
         "band_style_set": ("Change a band style's title and size (what the band writes at each station is set in Civil 3D's dialog).",
                            {"kind": "band_profile_data | band_pipe_network | ...", "name": "", "title?": "", "height?": "mm on paper",
                             "title_width?": "mm", "title_text_height?": "mm"}),
-        "profile_view_bands": ("Replace the bands of a profile view. Each band uses an existing band style and its data source.",
-                               {"profile_view": "", "bottom?": "[{type: profile_data|pipe_network|horizontal_geometry|vertical_geometry, style, "
+        "profile_view_bands": ("Replace the bands of a profile view: every band of a band set, or bands listed one by one "
+                               "(each with an existing band style and its data source).",
+                               {"profile_view": "", "band_set?": "a band set name, or auto (as profile_view_create); "
+                                "profile data bands get the alignment's first profile", "bottom?": "[{type: profile_data|pipe_network|horizontal_geometry|vertical_geometry, style, "
                                 "profile1?, profile2?, network?: gravity network (pipe_network bands), gap?: mm, label_start?, label_end?}, ...]",
                                 "top?": "same"}),
     },

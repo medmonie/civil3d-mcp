@@ -13,11 +13,13 @@ internal static class EditRequests
     private static readonly Queue<(Entry Entry, int Bytes)> Replies = new();
     private static long _replyBytes;
 
-    private sealed class Entry(DrawingTarget target, string fingerprint)
+    private sealed class Entry(DrawingTarget target, string fingerprint, string? workflow)
     {
         public DrawingTarget Target { get; } = target;
+        public string? Workflow { get; } = workflow;
         public string Fingerprint { get; } = fingerprint;
         public string State { get; set; } = "pending";
+        public bool? AfterCommitSucceeded { get; set; }
         public bool? Applied { get; set; }
         public string? Error { get; set; }
         public JsonElement? Result { get; set; }
@@ -46,7 +48,7 @@ internal static class EditRequests
             {
                 if (Requests.Count >= MaxRequests)
                     throw new InvalidOperationException("This bridge session reached its edit request limit. Restart Civil 3D to start a new session.");
-                entry = new Entry(target, fingerprint);
+                entry = new Entry(target, fingerprint, StrParam(args, "workflow"));
                 Requests.Add(id, entry);
             }
         }
@@ -75,6 +77,7 @@ internal static class EditRequests
             {
                 entry.State = "completed";
                 entry.Applied = applied;
+                entry.AfterCommitSucceeded = result.TryGetProperty("afterCommitSucceeded", out var after) ? after.GetBoolean() : null;
                 if (size <= MaxReplyBytes)
                 {
                     entry.Result = result;
@@ -118,7 +121,9 @@ internal static class EditRequests
     {
         request_id = id,
         state = entry.State,
+        workflow = entry.Workflow,
         applied = entry.Applied,
+        afterCommitSucceeded = entry.AfterCommitSucceeded,
         result = entry.Result,
         error = entry.Error,
         resultExpired = entry.State == "completed" && entry.Result == null,

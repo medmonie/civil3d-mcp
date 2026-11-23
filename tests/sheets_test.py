@@ -42,6 +42,10 @@ ENTITIES = [
 class Fake:
     def __init__(self, views: list[dict[str, Any]], alignments: list[dict[str, Any]]):
         self.views, self.alignments, self.edits = views, alignments, []
+        self.ledger, self.layouts = {}, {"Model"}
+        self.missing = None
+        self.drop_reply = False
+        self.rollback = False
 
     def __call__(self, method: str, params: dict[str, Any] | None = None, timeout: float | None = None) -> Any:
         params = params or {}
@@ -53,16 +57,37 @@ class Fake:
             return {"profileViews": self.views}
         if method == "list_alignments":
             return {"alignments": self.alignments}
+        if method == "profile_sheet_window":
+            lo, hi = params["x_min"], params["x_max"]
+            return {"stationRange": [1000 + lo, 1000 + hi], "window": [2000 + lo, 2000, 2000 + hi, 2050]}
+        if method == "get_edit_status":
+            return self.ledger.get(params["request_id"], {"state": "unknown"})
         if method == "list_layouts":
-            return {"layouts": [{"name": "Model"}]}
+            return {"layouts": [{"name": n} for n in self.layouts]}
         if method == "list_viewports":   # the copied layout: same positions, new handles
+            if params["layout"] == self.missing:
+                return {"viewports": []}
             return {"viewports": [{**v, "handle": "N" + v["handle"]} for v in (PLAN, PROFILE, KEY)]}
         if method == "list_entities":   # copied justified text moves a little (its insertion point is recomputed)
             moved = lambda e: {**e, "geometry": {**e["geometry"], "at": [e["geometry"]["at"][0] + 1.0, e["geometry"]["at"][1], 0]}} if e["type"] == "TEXT" else e
             return {"entities": [{**moved(e), "handle": "N" + e["handle"]} for e in ENTITIES]}
         if method == "edit":
             self.edits.append(params["operations"])
-            return {"applied": True, "results": []}
+            ops = params["operations"]
+            assert len(ops) <= 500 and params["request_id"] not in self.ledger
+            for op in ops:
+                if op["op"] == "layout_from_template":
+                    self.layouts.add(op["name"])
+            result = {"applied": True, "results": []}
+            if self.rollback and ops[0]["op"] == "viewport_set":
+                result = {"applied": False, "error": "content rolled back"}
+                self.rollback = False
+            self.ledger[params["request_id"]] = {"state": "completed", "applied": result["applied"], "result": result,
+                                                  "workflow": params["workflow"]}
+            if self.drop_reply and ops[0]["op"] == "viewport_set":
+                self.drop_reply = False
+                raise sheets.BridgeError("Lost the content reply")
+            return result
         raise AssertionError(method)
 
 
@@ -88,7 +113,8 @@ def main() -> None:
     assert [s["layout"] for s in plan["sheets"]] == ["01", "02", "03", "04"]
     assert plan["sheets"][0]["label"] == "( 01 / 04 )"
     assert plan["sheets"][0]["planScale"] == 400, plan["sheets"][0]["planScale"]     # 180 m wide + 2 x 10 % on 675 mm -> 1:320 -> 1:400
-    assert plan["sheets"][1]["planScale"] == 2000, plan["sheets"][1]["planScale"]    # 900 x 300 m + 10 %; 279 mm high -> 1:2000
+    assert [row["planCenter"][0] for row in plan["sheets"][1:]] == [2250, 2750, 3100]
+    assert [row["stationRange"] for row in plan["sheets"][1:]] == [[1000, 1500], [1500, 2000], [2000, 2200]]
     t = plan["template"]
     assert t["plan"]["handle"] == "1B19" and t["profile"]["handle"] == "1B1C" and t["key"]["handle"] == "1E9B"
     assert len(t["lines"]) == 2 and t["lineSpacing"] == 6.0 and t["label"] and t["scaleBar"]
@@ -133,6 +159,48 @@ def main() -> None:
     assert not [o for o in ops if o["op"] in ("entity_scale", "entity_move") and "N1E9E" in o["handles"]], ops
     assert any("outside the key plan" in n for n in reply["notes"]), reply["notes"]
     print("build ok: a plan outside the key plan leaves the key-plan box in place")
+    from unittest.mock import patch
+    sheets.call = Fake(views[-1:], aligns[-1:])
+    with patch.dict(PROFILE, customScale=3):
+        narrow = sheets.plan_sheets(base, TARGET)["sheets"]
+    end = 0
+    for row in narrow:
+        left, right = row["stationRange"]
+        assert left == end + 1000 and right - left <= 225
+        x = row["profileCenter"][0]
+        assert x - 112.5 <= left - 1000 and x + 112.5 >= right - 1000
+        end = right - 1000
+    assert end == 1200
+
+    fake = Fake([], [])
+    sheets.call = fake
+    many = {**base, "sheets": [{"lines": ["Water"]} for _ in range(100)]}
+    fake.missing = "001"
+    missing = sheets.build(many)
+    assert not missing["built"] and missing["sheets"] == [] and missing["copiedLayouts"] == ["001"]
+    fake.missing = "042"
+    partial = sheets.build(many)
+    assert not partial["built"] and len(partial["sheets"]) == 41 and "042" in partial["error"]
+    assert partial["stages"]["043"] == "pending" and "043" not in fake.layouts
+    fake.missing = None
+    fake.drop_reply = True
+    interrupted = sheets.build(many)
+    assert not interrupted["built"] and len(interrupted["sheets"]) == 41
+    done = sheets.build(many)
+    assert done["built"] and len(done["sheets"]) == 100 and len(fake.edits) == 200
+    assert sheets.build(many)["built"] and len(fake.edits) == 200
+    changed = {**many, "plan_margin": 0.2, "if_exists": "replace"}
+    assert not sheets.build(changed)["built"] and len(fake.edits) == 200
+    sheets.call = Fake([], [])
+    large = sheets.build({**base, "sheets": [{"lines": [str(i) for i in range(1050)]}]})
+    assert large["built"] and sum(op["op"] == "draw_text" for ops in sheets.call.edits for op in ops) == 1050
+    fake = Fake([], [])
+    fake.rollback = True
+    sheets.call = fake
+    one = {**base, "sheets": [{"lines": ["A"]}]}
+    assert not sheets.build(one)["built"]
+    assert sheets.build(one)["built"] and len(fake.edits) == 3
+    print("coverage, station-specific plans, missing viewports, bounded edits and lost-reply resume ok")
     print("\nALL OK")
 
 

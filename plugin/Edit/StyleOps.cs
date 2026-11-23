@@ -187,6 +187,23 @@ internal static class StyleOps
         pv.UpgradeOpen();
         var alignment = (CivilDb.Alignment)c.Tr.GetObject(pv.AlignmentId, OpenMode.ForRead);
         var report = new List<object>();
+        if (StrParam(p, "band_set") is string setName)
+        {
+            // all the bands of a band set, each with its data (profile data bands get the alignment's first profile)
+            var set = (CivilStyles.ProfileViewBandSetStyle)c.Tr.GetObject(AlignmentOps.BandSetFor(c, setName), OpenMode.ForRead);
+            foreach (var (from, location) in new[] { (set.GetBottomBandSetItems(), Autodesk.Civil.BandLocationType.Bottom),
+                                                     (set.GetTopBandSetItems(), Autodesk.Civil.BandLocationType.Top) })
+            {
+                var items = new CivilDb.ProfileViewBandItemCollection(pv.ObjectId, location);
+                for (int i = 0; i < from.Count; i++) items.Add(from[i].BandStyleId);
+                for (int i = 0; i < from.Count; i++) items[i].Gap = from[i].Gap;
+                if (location == Autodesk.Civil.BandLocationType.Bottom) pv.Bands.SetBottomBandItems(items);
+                else pv.Bands.SetTopBandItems(items);
+            }
+            var bands = AlignmentOps.FillBandData(c, pv, alignment);
+            if (bands.Count == 0) throw new ArgumentException($"profile_view_bands: band set '{set.Name}' has no bands.");
+            return new { profileView = pv.Name, bandSet = set.Name, bands };
+        }
         foreach (var (param, location) in new[] { ("bottom", Autodesk.Civil.BandLocationType.Bottom), ("top", Autodesk.Civil.BandLocationType.Top) })
         {
             if (!Has(p, param)) continue;
@@ -214,7 +231,7 @@ internal static class StyleOps
             if (location == Autodesk.Civil.BandLocationType.Bottom) pv.Bands.SetBottomBandItems(items);
             else pv.Bands.SetTopBandItems(items);
         }
-        if (report.Count == 0) throw new ArgumentException("profile_view_bands: give 'bottom' and/or 'top' bands.");
+        if (report.Count == 0) throw new ArgumentException("profile_view_bands: give band_set, or 'bottom' and/or 'top' bands.");
         return new { profileView = pv.Name, bands = report };
     }
 }

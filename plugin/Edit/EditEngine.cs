@@ -89,12 +89,12 @@ internal static class EditEngine
         }
 
         // 4. Saving and plotting cannot run inside the transaction; they follow the commit.
-        if (!dryRun) RunAfterCommit(doc, target, ctx);
+        bool afterCommitSucceeded = dryRun || RunAfterCommit(doc, target, ctx);
 
         Audit.Write(dryRun ? "edit_dry_run" : "edit_applied", new { requestId, drawing = doc.Name, summary, operations = ops.Count, warnings = ctx.Warnings.Count });
         return new
         {
-            applied = !dryRun, dryRun, drawing = Path.GetFileName(doc.Name), operations = ops.Count, results, warnings = ctx.Warnings,
+            applied = !dryRun, dryRun, afterCommitSucceeded, drawing = Path.GetFileName(doc.Name), operations = ops.Count, results, warnings = ctx.Warnings,
             note = dryRun ? "Dry run: everything was executed and then rolled back; the drawing is unchanged."
                           : "Committed as one transaction (one UNDO step in Civil 3D).",
         };
@@ -115,10 +115,11 @@ internal static class EditEngine
         return names;
     }
 
-    private static void RunAfterCommit(Document doc, DrawingTarget target, EditContext ctx)
+    private static bool RunAfterCommit(Document doc, DrawingTarget target, EditContext ctx)
     {
         try { doc.Editor.UpdateScreen(); } catch { /* cosmetic */ }
-        if (ctx.AfterCommit.Count == 0) return;
+        if (ctx.AfterCommit.Count == 0) return true;
+        bool succeeded = true;
         try
         {
             target.RequireActive();
@@ -126,12 +127,14 @@ internal static class EditEngine
             foreach (var work in ctx.AfterCommit)
             {
                 try { target.RequireActive(); work(); }
-                catch (Exception ex) { ctx.Warnings.Add($"after commit (save / plot) FAILED: {ex.GetType().Name}: {ex.Message}"); }
+                catch (Exception ex) { succeeded = false; ctx.Warnings.Add($"after commit (save / plot) FAILED: {ex.GetType().Name}: {ex.Message}"); }
             }
         }
         catch (Exception ex)
         {
+            succeeded = false;
             ctx.Warnings.Add($"after commit (save / plot) could not start: {ErrorText(ex)}");
         }
+        return succeeded;
     }
 }

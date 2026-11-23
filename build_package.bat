@@ -32,6 +32,7 @@ echo [3/4] installer zip >> "%LOG%"
 copy /y package\install.bat dist\C3dMcp\ >> "%LOG%" 2>&1
 copy /y package\uninstall.bat dist\C3dMcp\ >> "%LOG%" 2>&1
 copy /y package\INSTALL.txt dist\C3dMcp\ >> "%LOG%" 2>&1
+copy /y CHANGELOG.md dist\C3dMcp\ >> "%LOG%" 2>&1 || goto fail
 copy /y README.md dist\C3dMcp\ >> "%LOG%" 2>&1
 powershell -NoProfile -Command "Compress-Archive -Path dist\C3dMcp -DestinationPath dist\C3dMcp.zip -Force" >> "%LOG%" 2>&1 || goto fail
 
