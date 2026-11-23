@@ -98,7 +98,7 @@ READ_GROUPS: dict[str, Group] = {
                         {"network": "", "freeboard?": "m below the rim, default 0"}),
         "network_interference": ("Clearance check between the pipes of two networks (gravity or pressure), or within one network: "
                                  "every pair closer than 'clearance' outside to outside, with the gap, the location and which "
-                                 "pipe is above. Negative gap = clash.",
+                                 "pipe is above. Negative gap = clash. Only straight circular pipes are checked. Inspect complete and excludedPipes for omitted geometry.",
                                  {"network1": "", "network2?": "default: network1 against itself", "clearance?": "m, default 0.3",
                                   "limit?": "default 500"}),
     },

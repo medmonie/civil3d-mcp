@@ -56,7 +56,7 @@ internal static class CivilOps
                 foreach (ObjectId id in net.GetPipeIds())
                 {
                     var pipe = (CivilDb.Pipe)c.Tr.GetObject(id, OpenMode.ForRead);
-                    double r = pipe.InnerDiameterOrWidth / 2;
+                    double r = GravityRead.InnerHalfHeight(pipe);
                     rows.Add(new() { pipe.Name, Name(pipe.StartStructureId), Name(pipe.EndStructureId), pipe.PartSizeName ?? "",
                                      pipe.PartFamilyName ?? "", F(pipe.Length2D), F(pipe.Slope * 100, 2),
                                      F(pipe.StartPoint.Z - r, 3), F(pipe.EndPoint.Z - r, 3) });
@@ -75,9 +75,17 @@ internal static class CivilOps
                     {
                         var pipe = (CivilDb.Pipe)c.Tr.GetObject(s.get_ConnectedPipe(i), OpenMode.ForRead);
                         bool atStart = pipe.StartStructureId == id;
-                        double inv = (atStart ? pipe.StartPoint.Z : pipe.EndPoint.Z) - pipe.InnerDiameterOrWidth / 2;
+                        double inv = (atStart ? pipe.StartPoint.Z : pipe.EndPoint.Z) - GravityRead.InnerHalfHeight(pipe);
                         string cell = $"{pipe.Name} ({F(inv, 3)})";
-                        if (atStart) outs.Add(cell); else ins.Add(cell);
+                        var flow = pipe.FlowDirection;
+                        if (flow == CivilDb.FlowDirectionType.Bidirectional)
+                        {
+                            cell += " [bidirectional]";
+                            ins.Add(cell);
+                            outs.Add(cell);
+                        }
+                        else if (atStart == (flow == CivilDb.FlowDirectionType.StartToEnd)) outs.Add(cell);
+                        else ins.Add(cell);
                     }
                     rows.Add(new() { s.Name, F(s.RimElevation, 3), F(s.SumpElevation, 3), F(s.RimElevation - s.SumpElevation),
                                      string.Join(", ", ins), string.Join(", ", outs) });

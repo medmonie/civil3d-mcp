@@ -78,7 +78,7 @@ Everything goes through one MCP tool: `civil3d(action, params)`. A parameter end
 | `list_structures` | `network_name?` only this network<br>`limit?` default 200 | Gravity structures: part, location, rim/sump elevation, connected pipes. |
 | `list_gravity_parts` | `parts_list?` name or handle | Without parts_list: the gravity parts lists. With it: its pipe and structure families and sizes (use these to fill 'family' + 'inner_diameter' / 'size_index' in pipe_network_add). |
 | `network_hgl` | `network`<br>`freeboard?` m below the rim, default 0 | Hydraulic and energy grade lines of a gravity network's pipes and structures, flagging HGL above a rim (flooding, or within 'freeboard' of it) or above a pipe crown (surcharge). |
-| `network_interference` | `network1`<br>`network2?` default: network1 against itself<br>`clearance?` m, default 0.3<br>`limit?` default 500 | Clearance check between the pipes of two networks (gravity or pressure), or within one network: every pair closer than 'clearance' outside to outside, with the gap, the location and which pipe is above. Negative gap = clash. |
+| `network_interference` | `network1`<br>`network2?` default: network1 against itself<br>`clearance?` m, default 0.3<br>`limit?` default 500 | Clearance check between the pipes of two networks (gravity or pressure), or within one network: every pair closer than 'clearance' outside to outside, with the gap, the location and which pipe is above. Negative gap = clash. Only straight circular pipes are checked. Inspect complete and excludedPipes for omitted geometry. |
 
 ### Pressure networks
 

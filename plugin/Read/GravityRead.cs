@@ -3,6 +3,15 @@ namespace C3dMcpBridge;
 /// <summary>Gravity pipe networks: networks, pipes, structures and the parts lists they draw from (read only).</summary>
 internal static class GravityRead
 {
+    internal static double InnerHalfHeight(CivilDb.Pipe pipe)
+    {
+        double height = pipe.CrossSectionalShape == CivilDb.SweptShapeType.Circular
+            ? pipe.InnerDiameterOrWidth : pipe.InnerHeight;
+        if (!double.IsFinite(height) || height <= 0)
+            throw new InvalidOperationException($"Pipe '{pipe.Name}' has no valid internal height.");
+        return height / 2;
+    }
+
     private static IEnumerable<CivilDb.Network> Networks(Transaction tr, string? only = null) =>
         Civ.GetPipeNetworkIds().Cast<ObjectId>().Select(id => (CivilDb.Network)tr.GetObject(id, OpenMode.ForRead))
            .Where(n => only == null || SameName(n.Name, only));

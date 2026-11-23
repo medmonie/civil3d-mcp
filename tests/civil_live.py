@@ -163,6 +163,37 @@ if pf and sf:
         check("pipe above is the storm pipe", found[0]["above"] == "PB1", str(found[0]))
         ic0 = read("network_interference", network1=a_net, network2=b_net, clearance=0.0)
         check("clearance 0 reports only clashes", ic0.get("found") == (1 if gap < 0 else 0), f"gap {gap}: {ic0.get('found')}")
+    # Two pipes cross in one network. Each has a different start structure and an open end.
+    open_net = f"Open ends {tag}"
+    edit("two crossing pipes with open ends", [
+        {"op": "pipe_network_create", "name": open_net, "parts_list": key},
+        {"op": "pipe_network_add", "network": open_net,
+         "structures": [{"id": "W", "name": "W", "at": [1500, 1500, 10], "family": S, "size_index": 0},
+                        {"id": "S", "name": "S", "at": [1550, 1450, 10], "family": S, "size_index": 0}],
+         "pipes": [{"name": "WE", "start": [1500, 1500, 8], "end": [1600, 1500, 8],
+                    "start_structure": "W", "family": P, "size_index": 0},
+                   {"name": "SN", "start": [1550, 1450, 8], "end": [1550, 1550, 8],
+                    "start_structure": "S", "family": P, "size_index": 0}]},
+    ])
+    for other in ({}, {"network2": open_net.swapcase()}):
+        report = read("network_interference", network1=open_net, **other)
+        conflicts = report.get("conflicts", [])
+        check(f"open ends produce one distinct crossing {other}",
+              report.get("complete") is True and report.get("excludedPipes") == []
+              and report.get("found") == 1 and len(conflicts) == 1
+              and {conflicts[0][side]["pipe"] for side in ("a", "b")} == {"WE", "SN"})
+    box = next((family for family in pf if "box" in family["family"].lower()), None)
+    if box:
+        edit("add box culvert to clearance fixture", [
+            {"op": "pipe_network_add", "network": open_net,
+             "pipes": [{"name": "Box", "start": [1530, 1480, 8], "end": [1530, 1520, 8],
+                        "family": box["family"], "size_index": 0}]},
+        ])
+        report = read("network_interference", network1=open_net)
+        check("partial check names the box and retains the circular crossing",
+              report.get("complete") is False and report.get("pipesA") == 3
+              and report.get("found") == 1
+              and [p["pipe"] for p in report.get("excludedPipes", [])] == ["Box"])
 else:
     check("gravity families available", False)
 

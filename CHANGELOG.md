@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.1
+
+Fixes from a ChatGPT review of 0.15.0:
+
+- `network_interference`: pipes with an open end (no structure) were wrongly skipped as "sharing a structure" when a network was checked against itself, so crossings could be missed. Naming the same network twice (any letter case) now counts as one network. Only straight circular pipes are measured; curved or segmented pressure pipes and box / egg-shaped pipes are listed in `excludedPipes`, and `complete` says whether every pipe was checked.
+- `network_table` and `network_hgl` use the pipe's real inner height for non-circular pipes (box, egg) instead of its width, and follow each pipe's flow direction: inverts in / out at a structure and HGL up / down are by flow, not by drawing direction; bidirectional pipes appear on both sides.
+- `tests\run_civil.bat` adds an open-ended crossing and a box culvert case.
+
 ## 0.15.0
 
 Civil 3D gaps from the roadmap (#41–45): 8 read actions and 10 edit operations (56 / 100 in all), live-tested in Civil 3D 2027 (`tests\run_civil.bat` in a new drawing, ALL PASS) and built for 2024, 2025 and 2027.

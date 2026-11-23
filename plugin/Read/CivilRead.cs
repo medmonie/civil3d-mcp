@@ -116,7 +116,10 @@ internal static class CivilRead
         var flags = new List<object>();
         var pipes = net.GetPipeIds().Cast<ObjectId>().Select(id => (CivilDb.Pipe)tr.GetObject(id, OpenMode.ForRead)).Select(x =>
         {
-            double crownUp = x.StartPoint.Z + x.InnerDiameterOrWidth / 2, crownDown = x.EndPoint.Z + x.InnerDiameterOrWidth / 2;
+            double halfHeight = GravityRead.InnerHalfHeight(x);
+            bool reversed = x.FlowDirection == CivilDb.FlowDirectionType.EndToStart;
+            double crownUp = (reversed ? x.EndPoint.Z : x.StartPoint.Z) + halfHeight;
+            double crownDown = (reversed ? x.StartPoint.Z : x.EndPoint.Z) + halfHeight;
             double hu = x.HydraulicGradeLineUp, hd = x.HydraulicGradeLineDown;
             if (hu > crownUp + 1e-6 || hd > crownDown + 1e-6)
                 flags.Add(new { part = x.Name, issue = "surcharged", hglUp = R3(hu), hglDown = R3(hd), crownUp = R3(crownUp), crownDown = R3(crownDown) });
@@ -135,21 +138,34 @@ internal static class CivilRead
 
     private sealed record Seg(string Network, string Name, string Kind, Point3d A, Point3d B, double Radius, ObjectId StartNode, ObjectId EndNode);
 
-    private static IEnumerable<Seg> Segments(Transaction tr, string network)
+    private static CivilDb.Entity ResolveNetwork(Transaction tr, string name) =>
+        (CivilDb.Entity?)TryFindPressureNetwork(Civ, tr, name) ?? FindPipeNetwork(Civ, tr, name);
+
+    private static IEnumerable<Seg> Segments(Transaction tr, CivilDb.Entity network, List<object> excluded)
     {
-        if (TryFindPressureNetwork(Civ, tr, network) is { } pnet)
+        if (network is CivilDb.PressurePipeNetwork pnet)
         {
             foreach (ObjectId id in pnet.GetPipeIds())
             {
                 var pp = (CivilDb.PressurePipe)tr.GetObject(id, OpenMode.ForRead);
+                if (pp.IsCurve || pp.HasVerticalSegments)
+                {
+                    excluded.Add(new { network = pnet.Name, pipe = pp.Name, handle = H(id), reason = "Curved or vertically segmented pressure pipe" });
+                    continue;
+                }
                 yield return new Seg(pnet.Name, pp.Name, "pressure pipe", pp.StartPoint, pp.EndPoint, pp.OuterDiameter / 2, ObjectId.Null, ObjectId.Null);
             }
             yield break;
         }
-        var net = FindPipeNetwork(Civ, tr, network);
+        var net = (CivilDb.Network)network;
         foreach (ObjectId id in net.GetPipeIds())
         {
             var pipe = (CivilDb.Pipe)tr.GetObject(id, OpenMode.ForRead);
+            if (pipe.SubEntityType != CivilDb.PipeSubEntityType.Straight || pipe.CrossSectionalShape != CivilDb.SweptShapeType.Circular)
+            {
+                excluded.Add(new { network = net.Name, pipe = pipe.Name, handle = H(id), reason = "Clearance requires a straight circular pipe" });
+                continue;
+            }
             yield return new Seg(net.Name, pipe.Name, "pipe", pipe.StartPoint, pipe.EndPoint, pipe.OuterDiameterOrWidth / 2, pipe.StartStructureId, pipe.EndStructureId);
         }
     }
@@ -192,8 +208,13 @@ internal static class CivilRead
         string? n2 = StrParam(p, "network2");
         double clearance = DblParam(p, "clearance") ?? 0.3;
         int limit = IntParam(p, "limit", 500, 1, 5000);
-        var a = Segments(tr, n1).ToList();
-        var b = n2 == null ? a : Segments(tr, n2).ToList();
+        var first = ResolveNetwork(tr, n1);
+        var second = n2 == null ? first : ResolveNetwork(tr, n2);
+        bool sameNetwork = first.ObjectId == second.ObjectId;
+        var excluded = new List<object>();
+        var a = Segments(tr, first, excluded).ToList();
+        int excludedA = excluded.Count;
+        var b = sameNetwork ? a : Segments(tr, second, excluded).ToList();
         var hits = new List<(double gap, object row)>();
         long tested = 0;
         for (int i = 0; i < a.Count; i++)
@@ -201,13 +222,13 @@ internal static class CivilRead
             var x = a[i];
             double xMinX = Math.Min(x.A.X, x.B.X) - x.Radius - clearance, xMaxX = Math.Max(x.A.X, x.B.X) + x.Radius + clearance;
             double xMinY = Math.Min(x.A.Y, x.B.Y) - x.Radius - clearance, xMaxY = Math.Max(x.A.Y, x.B.Y) + x.Radius + clearance;
-            for (int j = n2 == null ? i + 1 : 0; j < b.Count; j++)
+            for (int j = sameNetwork ? i + 1 : 0; j < b.Count; j++)
             {
                 var y = b[j];
                 if (Math.Max(y.A.X, y.B.X) + y.Radius < xMinX || Math.Min(y.A.X, y.B.X) - y.Radius > xMaxX ||
                     Math.Max(y.A.Y, y.B.Y) + y.Radius < xMinY || Math.Min(y.A.Y, y.B.Y) - y.Radius > xMaxY) continue;
-                if (n2 == null && !x.StartNode.IsNull &&
-                    (x.StartNode == y.StartNode || x.StartNode == y.EndNode || x.EndNode == y.StartNode || x.EndNode == y.EndNode)) continue;
+                bool SharesNode(ObjectId node) => !node.IsNull && (node == y.StartNode || node == y.EndNode);
+                if (sameNetwork && (SharesNode(x.StartNode) || SharesNode(x.EndNode))) continue;
                 tested++;
                 var (dist, pa, pb) = Closest(x.A, x.B, y.A, y.B);
                 double gap = dist - x.Radius - y.Radius;
@@ -223,9 +244,11 @@ internal static class CivilRead
         var rows = hits.OrderBy(h => h.gap).Take(limit).Select(h => h.row).ToList();
         return new
         {
-            network1 = n1, network2 = n2 ?? n1, clearance, pipesA = a.Count, pipesB = b.Count, pairsTested = tested,
+            network1 = n1, network2 = n2 ?? n1, clearance, pipesA = a.Count + excludedA,
+            pipesB = b.Count + (sameNetwork ? excludedA : excluded.Count - excludedA), pairsTested = tested,
+            complete = excluded.Count == 0, excludedPipes = excluded,
             found = hits.Count, clashes = hits.Count(h => h.gap < 0), truncated = hits.Count > limit, conflicts = rows,
-            note = "Gap = outside-to-outside distance between pipe centrelines minus both outer radii (straight pipes). Structures are not included.",
+            note = "Gap is the minimum centreline distance minus both outer radii. Counts cover eligible straight circular pipes only. See excludedPipes for omitted geometry. Structures are outside the scope.",
         };
     });
 }
