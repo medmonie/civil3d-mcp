@@ -1,6 +1,6 @@
 # Roadmap
 
-This file has two parts: what the Civil 3D MCP does today (v0.13.0), and what could be added next, with an effort estimate and a priority for each item.
+This file has two parts: what the Civil 3D MCP does today (v0.15.0), and what could be added next, with an effort estimate and a priority for each item.
 
 **Effort** (one developer, including the live test in Civil 3D):
 
@@ -21,9 +21,9 @@ This file has two parts: what the Civil 3D MCP does today (v0.13.0), and what co
 
 ---
 
-## 1. What it does today (v0.13.0)
+## 1. What it does today (v0.15.0)
 
-47 read actions and 90 edit operations, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. A dry run executes and rolls back. Each edit names the drawing it is for and carries a request ID, so it cannot land in the wrong drawing or run twice. Editing needs permission per drawing (`MCPALLOW` or the dialog). Works with Claude, ChatGPT desktop and Codex; ChatGPT in a browser connects read-only. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
+56 read actions and 100 edit operations, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. A dry run executes and rolls back. Each edit names the drawing it is for and carries a request ID, so it cannot land in the wrong drawing or run twice. Editing needs permission per drawing (`MCPALLOW` or the dialog). Works with Claude, ChatGPT desktop and Codex; ChatGPT in a browser connects read-only. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
 
 | Area | Read | Create / edit |
 |---|---|---|
@@ -89,15 +89,15 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 | 46 | **Multi-sheet PDF with mixed paper sizes** | M | AutoCAD's plot engine puts only same-size sheets in one PDF; Autodesk points to the Publish API (DSD) for mixed A1 / A0 sets. |
 | 47 | **"Fit to paper" for a layout PDF** | S | `page_setup_set scale: "fit"` on a layout did not change the PDF in the live test (an A0 layout on A1 paper stayed 1:1). Same-size plotting is correct. |
 
-### Civil 3D, added
+### Civil 3D, added (done in 0.15)
 
-| # | Feature | Effort | Priority | Why / notes |
+| # | Feature | Effort | Priority | Done |
 |---|---|---|---|---|
-| 41 | **Pipe and structure tables** | S | P2 | Civil 3D tables in the drawing, not only the Excel BOQ. |
-| 42 | **Point files, point groups, description keys** | M | P2 | Survey import with the office's description keys. |
-| 43 | **Surface analysis** | M | P2 | Elevation and slope banding, slope arrows, watersheds, cut/fill reports. |
-| 44 | **Alignment from polyline, intersections, superelevation** | M–L | P2 | Road layout from a sketch. |
-| 45 | **Interference check and hydraulic grade line** | M | P2 | Network checks beyond the crossing report (#7). |
+| 41 | ✅ 0.15 **Pipe and structure tables** | S | P2 | `network_table`: pipe, structure and pressure-pipe schedules drawn as AutoCAD tables. Civil 3D's own network tables are not in the .NET API, so the table is a snapshot: draw it again after changes. |
+| 42 | ✅ 0.15 **Point files, point groups, description keys** | M | P2 | `points_import` (any point file format of the drawing, into a point group), `point_group_create` (queries with wildcards and ranges), `description_key_create`; reads `list_point_groups`, `list_point_file_formats`, `list_description_keys`. |
+| 43 | ✅ 0.15 **Surface analysis** | M | P2 | `surface_analysis_set` (elevation, slope and slope-arrow ranges with colours, shown through a surface style), `surface_waterdrop`, `get_surface_analysis` (ranges, watersheds). Cut / fill: `surface_volume_create`. |
+| 44 | ✅ 0.15 **Alignment from polyline, intersections, superelevation** | M–L | P2 | `alignment_from_polyline`, `alignment_offset_create`, `get_superelevation`, `superelevation_slope_set`, `list_intersections`. Creating intersections and calculating superelevation are commands only (not in .NET). |
+| 45 | ✅ 0.15 **Interference check and hydraulic grade line** | M | P2 | `network_interference` (clearance / clash between pipes of two networks, gravity or pressure, or within one), `hgl_set`, `network_hgl` (flooding and surcharge flags). Structures are not part of the clearance check yet. |
 
 ### P2 — useful
 

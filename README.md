@@ -1,6 +1,6 @@
 # Civil 3D MCP bridge
 
-**Version 0.14 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
+**Version 0.15 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
 
 Lets Claude, ChatGPT and other MCP clients read the open Civil 3D drawing and edit it after you grant permission in Civil 3D.
 It covers:
@@ -238,7 +238,7 @@ sheet: `layout_from_template` (your office template's layout with its title bloc
 
 ## 4. Features
 
-One tool, `civil3d(action, params)`: 48 read actions, 9 QA / help / import / sheet actions, and 90 edit operations inside the
+One tool, `civil3d(action, params)`: 56 read actions, 9 QA / help / import / sheet actions, and 100 edit operations inside the
 single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTIONS.md)** and by `action="help"`.
 
 ### Read (never changes the drawing)
@@ -247,10 +247,10 @@ single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTI
 |---|---|
 | Drawing (AutoCAD) | Drawing info, layers, entity counts by type or layer, your selection, objects by handle, entities with geometry (lines, polylines, circles, arcs, text, blocks with attributes, hatches, dimensions), blocks, layouts |
 | Sheets and set-up | Viewports (scale, model area, twist, frozen layers), named views, xrefs with status, text / dimension / multileader / table styles, linetypes, layer states, annotation scales, page setups, a block's attributes and dynamic properties |
-| Terrain | Surfaces and their elevations, elevation at a point, cut / fill of a volume surface, COGO points, feature lines, parcels |
-| Alignments | Alignments, station / offset to point and back, profiles, profile elevation at a station, profile views, sample lines, section views |
+| Terrain | Surfaces and their elevations, elevation at a point, cut / fill of a volume surface, surface analysis ranges and watersheds, COGO points, point groups, point file formats, description keys, feature lines, parcels |
+| Alignments | Alignments, station / offset to point and back, profiles, profile elevation at a station, profile views, sample lines, section views, superelevation (curves, critical stations, lane and shoulder slopes), corridor intersections |
 | Corridors | Corridors with baselines, regions and corridor surfaces; assemblies with their subassemblies |
-| Gravity networks | Networks, pipes (size, slope, length, connections), structures (rim, sump), parts lists with families and sizes |
+| Gravity networks | Networks, pipes (size, slope, length, connections), structures (rim, sump), parts lists with families and sizes, hydraulic grade lines with flooding / surcharge flags, a clearance / clash check between networks (gravity and pressure) |
 | Pressure networks | Networks, pipes (diameters, lengths, cover), fittings, appurtenances, pipe runs, parts lists and sizes |
 | Styles and meta | Style names of each kind (including band and label styles), what a style contains (`get_style`), edit-permission state, API introspection |
 | QA | Layer names against a naming pattern; objects still carrying Civil 3D's default names |
@@ -266,10 +266,10 @@ single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTI
 | Drawing file and sheets | Layouts (create, delete, copy from a template with its title block and viewports), page setups, viewports (at a scale, from a window or a named view, twisted, locked, layers frozen per viewport), named views, save / save as / save a copy / export DXF, PDF of one layout, a multi-sheet PDF, or one PDF per layout |
 | External references | Attach, reload, detach and bind xrefs; PDF and image underlays |
 | AutoCAD styles and set-up | Text, dimension and multileader styles; linetypes; annotation scales; layer states; purge |
-| Terrain | COGO points (add, change, remove); TIN surfaces from points, breaklines (from points or from feature lines), boundaries, rebuild; volume surfaces with cut / fill; feature lines |
-| Alignments | Alignments from PIs with curves; layout profiles from PVIs; surface profiles; profile views (with network parts); sample lines; section views |
+| Terrain | COGO points (add, change, remove); import a point file (survey) into a point group; point groups with queries; description keys; TIN surfaces from points, breaklines (from points or from feature lines), boundaries, rebuild; elevation, slope and slope-arrow banding; waterdrop paths; volume surfaces with cut / fill; feature lines |
+| Alignments | Alignments from PIs with curves or from a polyline; offset alignments; superelevation slopes at critical stations; layout profiles from PVIs; surface profiles; profile views (with network parts); sample lines; section views |
 | Corridors | Assemblies from stock subassemblies; corridors (alignment + profile + assembly); corridor surfaces; rebuild |
-| Gravity networks | Create a network; add structures and pipes (connected automatically); change a pipe or a structure (rim, sump); labels; add a catalogue family to a parts list; import a SewerGEMS network |
+| Gravity networks | Create a network; add structures and pipes (connected automatically); change a pipe or a structure (rim, sump); labels; pipe and structure schedules as tables; hydraulic / energy grade lines and flow; add a catalogue family to a parts list; import a SewerGEMS network |
 | Styles and presentation | Create label styles (text, flow arrow); restyle and label a whole network; replace alignment labels; profile view style and ranges; profile view bands; band titles and sizes |
 | Pressure networks | Create, change, erase a network; add pipes (straight or curved), fittings and valves (connected automatically); pipe runs at a depth of cover with automatic bends; move or resize a part; labels |
 
@@ -412,6 +412,7 @@ plot_pdf         {"layouts": ["PP-01", "PP-02", ...], "path": "C:\\...\\PP sheet
 | Corridor targets (daylight to a surface, offset alignments), several regions | Not built yet | Set targets in Civil 3D after the corridor is created |
 | Section-view sheets and bands, plan production | Not built yet | Views are placed in a grid with default styles |
 | Create object styles, band styles, parts lists from scratch | Band contents are not exposed by the API; the others are not built yet | Use the styles of your template by name. Label styles can be created (`label_style_create`), and catalogue families can be added to a parts list |
+| Civil 3D's own pipe / structure tables, interference check objects, intersections, superelevation calculation | Not exposed by the .NET API | `network_table` draws the schedule as an AutoCAD table (draw it again after changes); `network_interference` checks clearances directly; intersections and superelevation can be read, and critical-station slopes changed |
 | Civil 3D 2026 or older than 2024 | Built for 2024, 2025 and 2027 only (2026 is not tested) | - |
 | Change the size of an existing pressure part (`pressure_part_set` with `size`) in Civil 3D 2024 | The 2024 API has no swap-size method | Delete the part and add it again with the new size |
 | One multi-sheet PDF of layouts on different papers (A1 + A0) | AutoCAD's plot engine puts only same-size sheets in one document | `plot_pdf` with `folder` (one PDF per layout), or make the papers alike with `page_setup_set` |

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.0
+
+Civil 3D gaps from the roadmap (#41–45): 8 read actions and 10 edit operations (56 / 100 in all), live-tested in Civil 3D 2027 (`tests\run_civil.bat` in a new drawing, ALL PASS) and built for 2024, 2025 and 2027.
+
+- **Network tables.** `network_table` draws a pipe, structure or pressure-pipe schedule as an AutoCAD table: from / to, size, material, length, slope and inverts for pipes; rim, sump, depth and the inverts in and out for structures. Civil 3D's own network tables cannot be created through .NET, so the table is a snapshot.
+- **Survey points.** `points_import` reads a point file with any of the drawing's point file formats, optionally into a point group (description keys apply). `point_group_create` makes a point group from include / exclude filters (numbers, raw or full descriptions, names, elevations, wildcards), with optional style overrides. `description_key_create` adds a key (code, format, point style, label style, layer) to a key set. Reads: `list_point_groups`, `list_point_file_formats`, `list_description_keys`; style kind `point_label`.
+- **Surface analysis.** `surface_analysis_set` sets elevation, slope or slope-arrow ranges (given, or N equal ranges) with colours and can turn that display on in a surface style. `surface_waterdrop` draws flow paths downhill. `get_surface_analysis` reads the ranges and watersheds.
+- **Alignments.** `alignment_from_polyline` (with curves between tangents), `alignment_offset_create`, `get_superelevation` (curves, critical stations, slope of every lane and shoulder), `superelevation_slope_set`, `list_intersections`.
+- **Hydraulics and clearances.** `hgl_set` writes HGL / EGL and flow to pipes and structures; `network_hgl` reads them and flags HGL above a rim (or within a freeboard) and above a pipe crown. `network_interference` finds pipe pairs of two networks (gravity or pressure, or one network against itself) closer than a clearance, with the gap, location and which pipe is above.
+
 ## 0.14.2
 
 - Profile views made by the WaterGEMS import get bands again. `profile_view_create` takes `band_set: "auto"` (the WaterGEMS default): 'Standard' when it has bands, otherwise the band set with "Elevation" in its name and the fewest bands (in Civil 3D's metric template: EG-FG Elevations and Stations). That template has no 'Standard' band set, so views fell back to its first set, 'Stations Only'. The reply lists the band set and the bands, and warns when a view still has none.

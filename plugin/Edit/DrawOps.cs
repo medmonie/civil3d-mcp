@@ -177,13 +177,18 @@ internal static class DrawOps
         var data = NeedArr(p, "rows", 2000).Select((row, i) => row.ValueKind == JsonValueKind.Array
             ? row.EnumerateArray().Select(Text).ToList()
             : throw new ArgumentException($"draw_table: row {i + 1} must be a list of cell values.")).ToList();
-        int cols = data.Max(r => r.Count);
-        if (cols == 0 || cols > 100) throw new ArgumentException("draw_table: 1 to 100 columns are supported.");
+        return MakeTable(c, p, data, StrParam(p, "title"));
+    }
+
+    /// <summary>An AutoCAD table at p.at (text_height, row_height, column_width, layer, layout from p).</summary>
+    internal static object MakeTable(EditContext c, JsonElement p, List<List<string>> data, string? title)
+    {
+        int cols = data.Count == 0 ? 0 : data.Max(r => r.Count);
+        if (cols == 0 || cols > 100) throw new ArgumentException("table: 1 to 100 columns are supported.");
         double textHeight = PositiveParam(p, "text_height") ?? DefaultTextHeight;
-        string? title = StrParam(p, "title");
         int titleRows = title != null ? 1 : 0;
 
-        var t = new Table { TableStyle = c.Db.Tablestyle, Position = NeedPt(p, "at", "draw_table") };
+        var t = new Table { TableStyle = c.Db.Tablestyle, Position = NeedPt(p, "at", "table") };
         t.SetSize(data.Count + titleRows, cols);
         t.SetRowHeight(PositiveParam(p, "row_height") ?? textHeight * 2);
         t.SetColumnWidth(PositiveParam(p, "column_width") ?? textHeight * 12);

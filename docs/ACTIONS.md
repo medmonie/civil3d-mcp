@@ -4,7 +4,7 @@ Generated from `server/catalog.py` by `tools/gen_docs.py` - do not edit by hand.
 
 Everything goes through one MCP tool: `civil3d(action, params)`. A parameter ending in `?` is optional.
 
-## Read actions (48) - never change the drawing
+## Read actions (56) - never change the drawing
 
 ### Drawing (AutoCAD)
 
@@ -41,6 +41,10 @@ Everything goes through one MCP tool: `civil3d(action, params)`. A parameter end
 | `list_cogo_points` | `limit?` default 200 | COGO points: number, name, easting, northing, elevation, description. |
 | `list_feature_lines` | `limit?` default 200 | Feature lines: length, min/max elevation, points. |
 | `list_parcels` | `limit?` default 500 | Parcels of every site: name, number, centroid, extents. Read only. |
+| `list_point_groups` | - | Point groups: description, point count, query, style overrides. |
+| `list_point_file_formats` | - | Point file formats available for points_import (name, extension, delimiter). |
+| `list_description_keys` | - | Description key sets with their keys: code, format, point style, label style, layer. |
+| `get_surface_analysis` | `surface` | A surface's min/max/mean elevation and its analysis ranges: elevations, slopes and slope arrows (percent) with colours, and watersheds. |
 
 ### Alignments
 
@@ -55,6 +59,8 @@ Everything goes through one MCP tool: `civil3d(action, params)`. A parameter end
 | `list_profile_views` | - | Profile views: alignment, style, station and elevation range, position in the drawing. |
 | `list_sample_lines` | `alignment_name?` only this alignment | Sample line groups with the stations of their sample lines. |
 | `list_section_views` | `limit?` default 500 | Section views: alignment, sample line group, sample line, station. |
+| `get_superelevation` | `alignment` | Superelevation of an alignment: curves and critical stations with the slope of each lane and shoulder (percent). |
+| `list_intersections` | - | Corridor intersections: name, location, corridor, number of roads. |
 
 ### Corridors
 
@@ -71,6 +77,8 @@ Everything goes through one MCP tool: `civil3d(action, params)`. A parameter end
 | `list_pipes` | `network_name?` only this network<br>`limit?` default 200 | Gravity pipes: part, inner diameter, slope (m/m), length, start/end, connected structures. |
 | `list_structures` | `network_name?` only this network<br>`limit?` default 200 | Gravity structures: part, location, rim/sump elevation, connected pipes. |
 | `list_gravity_parts` | `parts_list?` name or handle | Without parts_list: the gravity parts lists. With it: its pipe and structure families and sizes (use these to fill 'family' + 'inner_diameter' / 'size_index' in pipe_network_add). |
+| `network_hgl` | `network`<br>`freeboard?` m below the rim, default 0 | Hydraulic and energy grade lines of a gravity network's pipes and structures, flagging HGL above a rim (flooding, or within 'freeboard' of it) or above a pipe crown (surcharge). |
+| `network_interference` | `network1`<br>`network2?` default: network1 against itself<br>`clearance?` m, default 0.3<br>`limit?` default 500 | Clearance check between the pipes of two networks (gravity or pressure), or within one network: every pair closer than 'clearance' outside to outside, with the gap, the location and which pipe is above. Negative gap = clash. |
 
 ### Pressure networks
 
@@ -87,7 +95,7 @@ Everything goes through one MCP tool: `civil3d(action, params)`. A parameter end
 
 | Name | Parameters | What it does |
 |---|---|---|
-| `list_styles` | `kind` alignment \| alignment_label_set \| profile \| profile_label_set \| profile_view \| profile_view_band_set \| surface \| corridor \| pipe \| structure \| point \| feature_line \| sample_line \| pressure_pipe_label \| pressure_fitting_label \| pressure_appurtenance_label \| gravity_parts_list \| pipe_label \| structure_label \| band_profile_data \| band_pipe_network \| band_horizontal_geometry \| band_vertical_geometry | Style names of one kind (for the 'style' / 'label_set' parameters of edit operations). Without a style name an edit uses 'Standard' when the drawing has it, otherwise the first style listed. |
+| `list_styles` | `kind` alignment \| alignment_label_set \| point_label \| profile \| profile_label_set \| profile_view \| profile_view_band_set \| surface \| corridor \| pipe \| structure \| point \| feature_line \| sample_line \| pressure_pipe_label \| pressure_fitting_label \| pressure_appurtenance_label \| gravity_parts_list \| pipe_label \| structure_label \| band_profile_data \| band_pipe_network \| band_horizontal_geometry \| band_vertical_geometry | Style names of one kind (for the 'style' / 'label_set' parameters of edit operations). Without a style name an edit uses 'Standard' when the drawing has it, otherwise the first style listed. |
 | `get_style` | `kind` a list_styles kind<br>`name` | What one style contains: a label style's text components and their contents (the property-field syntax to copy into label_style_create), a band style's title and height, a profile view band set's bands. |
 | `describe_api` | `type_name` full type name<br>`contains?` member name filter<br>`limit?` default 300 | Developer aid: public members of an Autodesk.* .NET type loaded in Civil 3D. |
 | `get_edit_permission` | - | Whether editing is currently allowed in the active drawing, and how to allow it. |
@@ -112,7 +120,7 @@ Everything goes through one MCP tool: `civil3d(action, params)`. A parameter end
 
 Run a batch of operations on a specific open drawing. First call get_drawing_info and verify the drawing name. Pass its target and new_edit_request_id as target and request_id. Use the target from the reads used to prepare this edit. A changed session or active drawing stops the edit. The drawing operations share one transaction. dry_run aborts that transaction after validation. File outputs run after commit. Editing requires permission for the target drawing. If the response is interrupted, check get_edit_status with the original target and request_id; resend only with the same parameters and request ID for a retry. A request whose state is 'error' changed nothing (for example Civil 3D was busy) and may be resent with the same request ID.
 
-## Edit operations (90) - items of `operations`
+## Edit operations (100) - items of `operations`
 
 ### Layers and existing objects
 
@@ -208,12 +216,20 @@ Run a batch of operations on a specific open drawing. First call get_drawing_inf
 | `surface_rebuild` | `name` | Rebuild a surface. |
 | `surface_volume_create` | `name`<br>`base` base surface<br>`comparison` comparison surface | Create a TIN volume surface between two surfaces and return cut / fill / net volumes. |
 | `feature_line_create` | `name`<br>`points` [[x,y,z], ...]<br>`closed?`<br>`site?` created if missing<br>`layer?` | Create a feature line from 3D points. |
+| `points_import` | `path` full path of the .txt/.csv/.pnt file<br>`format` see list_point_file_formats, e.g. 'PENZD (comma delimited)'<br>`point_group?` | Import a point file (survey) with one of the drawing's point file formats, optionally into a point group (created if missing). Description keys apply as in Civil 3D. |
+| `point_group_create` | `name`<br>`description?`<br>`include_all?`<br>`include_numbers?`<br>`include_raw_descriptions?`<br>`include_full_descriptions?`<br>`include_names?`<br>`include_elevations?` e.g. '>10'<br>`exclude_numbers?`<br>`exclude_raw_descriptions?`<br>`exclude_names?`<br>`exclude_elevations?`<br>`point_style?` override<br>`label_style?` override (list_styles kind point_label)<br>`if_exists?` error (default) \| replace | Create (or with if_exists: replace, re-query) a point group. Filters take Civil 3D's lists and wildcards, e.g. include_raw_descriptions: 'MH*,IL*', include_numbers: '1-100,205'. |
+| `description_key_create` | `code`<br>`key_set?` default 'Default'<br>`format?` full description, default $*<br>`point_style?`<br>`label_style?`<br>`layer?`<br>`apply_to_points?` re-apply keys to all points<br>`if_exists?` error (default) \| replace | Add a description key (code, e.g. 'MH*') to a key set (created if missing) with the point style, label style and layer it applies. |
+| `surface_analysis_set` | `surface`<br>`type?` elevations (default) \| slopes \| slope_arrows<br>`ranges?` [{min, max, color?: ACI}, ...] elevations in drawing units, slopes in percent<br>`count?` default 8 (without ranges)<br>`max_slope?` percent, default 30 (slopes without ranges)<br>`show_in_style?` surface style to show the analysis in (changes that style for every surface using it) | Elevation, slope or slope-arrow banding of a surface: ranges with colours (or 'count' equal ranges), and optionally turn that display on in a surface style and give it to the surface. |
+| `surface_waterdrop` | `surface`<br>`points` [[x,y], ...]<br>`kind?` polyline2d (default) \| polyline3d<br>`layer?` | Waterdrop (flow path) polylines downhill from points on a surface. |
 
 ### Alignments
 
 | Name | Parameters | What it does |
 |---|---|---|
 | `alignment_create` | `name`<br>`points` [[x,y], ...]<br>`radius?` curve radius at each PI<br>`site?` default siteless<br>`layer?`<br>`style?`<br>`label_set?`<br>`description?` | Create an alignment from PI points (straight tangents; optional curve radius at every PI). |
+| `alignment_from_polyline` | `name`<br>`handle` polyline<br>`add_curves?` default false<br>`erase_polyline?` default false<br>`site?`<br>`layer?`<br>`style?`<br>`label_set?`<br>`description?` | Create an alignment from an existing polyline (handle), optionally with curves between its tangents. |
+| `alignment_offset_create` | `name`<br>`parent`<br>`offset`<br>`start_station?`<br>`end_station?`<br>`style?` | Create an offset alignment (negative offset = left), optionally for a station range. |
+| `superelevation_slope_set` | `alignment`<br>`station`<br>`slope_percent` e.g. -2.5<br>`segment?` RightInLaneCrossSlope (default) \| RightOutLaneCrossSlope \| LeftInLaneCrossSlope \| LeftOutLaneCrossSlope \| ...ShoulderCrossSlope<br>`tolerance?` default 0.01 | Change the cross slope of one lane or shoulder at an existing superelevation critical station (see get_superelevation). |
 | `profile_create` | `alignment`<br>`name`<br>`pvis` [[station, elevation], ...]<br>`layer?`<br>`style?`<br>`label_set?` | Create a layout profile from PVIs on an alignment. |
 | `profile_from_surface` | `alignment`<br>`surface`<br>`name`<br>`layer?`<br>`style?`<br>`label_set?` | Create a surface (existing ground) profile. |
 | `profile_view_create` | `alignment`<br>`at` [x,y] lower-left insertion point<br>`name?`<br>`style?`<br>`band_set?` name, or auto (Standard when it has bands, else the band set with Elevation in its name; default: Standard or the first set) | Create a profile view of an alignment (shows all its profiles). |
@@ -250,6 +266,8 @@ Run a batch of operations on a specific open drawing. First call get_drawing_inf
 | `pipe_set` | `handle`<br>`start?` [x,y,z]<br>`end?` [x,y,z]<br>`inner_diameter?` nearest catalogue size, in the units of list_gravity_parts (mm in metric lists)<br>`description?` | Change one gravity pipe. |
 | `structure_set` | `handle`<br>`location?` [x,y,z]<br>`rim?`<br>`sump?`<br>`rotation_deg?`<br>`description?` | Change one gravity structure. |
 | `parts_list_add_family` | `parts_list`<br>`domain` pipe \| structure<br>`family` exact family description, e.g. 'Cylindrical Junction Structure NF SI'<br>`sizes?` [inner diameter or width, ...] in the catalogue units (mm) | Add a part family from the Civil 3D catalogue to a gravity parts list, with the sizes given (e.g. a shallow flat-top manhole for a sanitary list). Nothing changes if it is already there. |
+| `network_table` | `network`<br>`kind?` pipes (default) \| structures \| pressure_pipes<br>`at` [x,y]<br>`title?`<br>`text_height?`<br>`row_height?`<br>`column_width?`<br>`layer?` default: current layer<br>`color?` AutoCAD colour index 1-255<br>`layout?` paper-space layout to draw on (default: model space) | Draw a pipe or structure schedule of a network as an AutoCAD table (snapshot of the current data: draw it again after changes). Pipes: from/to, size, material, length, slope, inverts. Structures: rim, sump, depth, inverts in/out. |
+| `hgl_set` | `network`<br>`pipes?` [{name, hgl_up?, hgl_down?, egl_up?, egl_down?, flow?}, ...]<br>`structures?` [{name, hgl?, egl?}, ...] | Set hydraulic / energy grade lines and flow on a gravity network's pipes and structures (e.g. from a SewerGEMS or StormCAD run) so profile views and labels can show them. |
 | `labels_add` | `pipe_network`<br>`pipes?` default true<br>`structures?` default true | Add default labels to the pipes and structures of a gravity network. |
 
 ### Pressure networks

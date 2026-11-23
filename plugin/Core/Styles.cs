@@ -19,6 +19,7 @@ internal static class Styles
         ["pipe"] = civ => civ.Styles.PipeStyles,
         ["structure"] = civ => civ.Styles.StructureStyles,
         ["point"] = civ => civ.Styles.PointStyles,
+        ["point_label"] = civ => Labels(civ).PointLabelStyles.LabelStyles,
         ["feature_line"] = civ => civ.Styles.FeatureLineStyles,
         ["sample_line"] = civ => civ.Styles.SampleLineStyles,
         ["pressure_pipe_label"] = PressurePipeLabels,

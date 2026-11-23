@@ -17,7 +17,7 @@ XY = "[x,y]"
 XYZ = "[x,y,z]"
 ACI = "AutoCAD colour index 1-255"
 LIMIT_200 = {"network_name?": "only this network", "limit?": "default 200"}
-STYLE_KINDS = ("alignment | alignment_label_set | profile | profile_label_set | profile_view | profile_view_band_set | surface | "
+STYLE_KINDS = ("alignment | alignment_label_set | point_label | profile | profile_label_set | profile_view | profile_view_band_set | surface | "
                "corridor | pipe | structure | point | feature_line | sample_line | pressure_pipe_label | pressure_fitting_label | "
                "pressure_appurtenance_label | gravity_parts_list | pipe_label | structure_label | band_profile_data | band_pipe_network | "
                "band_horizontal_geometry | band_vertical_geometry")
@@ -60,6 +60,11 @@ READ_GROUPS: dict[str, Group] = {
         "list_cogo_points": ("COGO points: number, name, easting, northing, elevation, description.", {"limit?": "default 200"}),
         "list_feature_lines": ("Feature lines: length, min/max elevation, points.", {"limit?": "default 200"}),
         "list_parcels": ("Parcels of every site: name, number, centroid, extents. Read only.", {"limit?": "default 500"}),
+        "list_point_groups": ("Point groups: description, point count, query, style overrides.", {}),
+        "list_point_file_formats": ("Point file formats available for points_import (name, extension, delimiter).", {}),
+        "list_description_keys": ("Description key sets with their keys: code, format, point style, label style, layer.", {}),
+        "get_surface_analysis": ("A surface's min/max/mean elevation and its analysis ranges: elevations, slopes and slope "
+                                 "arrows (percent) with colours, and watersheds.", {"surface": ""}),
     },
     "Alignments": {
         "list_alignments": ("Alignments (incl. the 'Pipe Run' alignments of pressure networks): type, site, length, stations.", {}),
@@ -73,6 +78,9 @@ READ_GROUPS: dict[str, Group] = {
         "list_profile_views": ("Profile views: alignment, style, station and elevation range, position in the drawing.", {}),
         "list_sample_lines": ("Sample line groups with the stations of their sample lines.", {"alignment_name?": "only this alignment"}),
         "list_section_views": ("Section views: alignment, sample line group, sample line, station.", {"limit?": "default 500"}),
+        "get_superelevation": ("Superelevation of an alignment: curves and critical stations with the slope of each lane and "
+                               "shoulder (percent).", {"alignment": ""}),
+        "list_intersections": ("Corridor intersections: name, location, corridor, number of roads.", {}),
     },
     "Corridors": {
         "list_corridors": ("Corridors: baselines with their regions and assemblies, corridor surfaces, out-of-date flag.", {}),
@@ -85,6 +93,14 @@ READ_GROUPS: dict[str, Group] = {
         "list_gravity_parts": ("Without parts_list: the gravity parts lists. With it: its pipe and structure families and sizes "
                                "(use these to fill 'family' + 'inner_diameter' / 'size_index' in pipe_network_add).",
                                {"parts_list?": "name or handle"}),
+        "network_hgl": ("Hydraulic and energy grade lines of a gravity network's pipes and structures, flagging HGL above a rim "
+                        "(flooding, or within 'freeboard' of it) or above a pipe crown (surcharge).",
+                        {"network": "", "freeboard?": "m below the rim, default 0"}),
+        "network_interference": ("Clearance check between the pipes of two networks (gravity or pressure), or within one network: "
+                                 "every pair closer than 'clearance' outside to outside, with the gap, the location and which "
+                                 "pipe is above. Negative gap = clash.",
+                                 {"network1": "", "network2?": "default: network1 against itself", "clearance?": "m, default 0.3",
+                                  "limit?": "default 500"}),
     },
     "Pressure networks": {
         "list_pressure_networks": ("Pressure networks: parts list, reference surface/alignment, part and pipe-run counts, elevations.", {}),
@@ -356,11 +372,46 @@ EDIT_GROUPS: dict[str, Group] = {
                                   {"name": "", "base": "base surface", "comparison": "comparison surface"}),
         "feature_line_create": ("Create a feature line from 3D points.",
                                 {"name": "", "points": "[[x,y,z], ...]", "closed?": "", "site?": "created if missing", "layer?": ""}),
+        "points_import": ("Import a point file (survey) with one of the drawing's point file formats, optionally into a point "
+                          "group (created if missing). Description keys apply as in Civil 3D.",
+                          {"path": "full path of the .txt/.csv/.pnt file", "format": "see list_point_file_formats, e.g. 'PENZD (comma delimited)'",
+                           "point_group?": ""}),
+        "point_group_create": ("Create (or with if_exists: replace, re-query) a point group. Filters take Civil 3D's lists and "
+                               "wildcards, e.g. include_raw_descriptions: 'MH*,IL*', include_numbers: '1-100,205'.",
+                               {"name": "", "description?": "", "include_all?": "", "include_numbers?": "", "include_raw_descriptions?": "",
+                                "include_full_descriptions?": "", "include_names?": "", "include_elevations?": "e.g. '>10'",
+                                "exclude_numbers?": "", "exclude_raw_descriptions?": "", "exclude_names?": "", "exclude_elevations?": "",
+                                "point_style?": "override", "label_style?": "override (list_styles kind point_label)",
+                                "if_exists?": "error (default) | replace"}),
+        "description_key_create": ("Add a description key (code, e.g. 'MH*') to a key set (created if missing) with the point "
+                                   "style, label style and layer it applies.",
+                                   {"code": "", "key_set?": "default 'Default'", "format?": "full description, default $*",
+                                    "point_style?": "", "label_style?": "", "layer?": "", "apply_to_points?": "re-apply keys to all points",
+                                    "if_exists?": "error (default) | replace"}),
+        "surface_analysis_set": ("Elevation, slope or slope-arrow banding of a surface: ranges with colours (or 'count' equal "
+                                 "ranges), and optionally turn that display on in a surface style and give it to the surface.",
+                                 {"surface": "", "type?": "elevations (default) | slopes | slope_arrows",
+                                  "ranges?": "[{min, max, color?: ACI}, ...] elevations in drawing units, slopes in percent",
+                                  "count?": "default 8 (without ranges)", "max_slope?": "percent, default 30 (slopes without ranges)",
+                                  "show_in_style?": "surface style to show the analysis in (changes that style for every surface using it)"}),
+        "surface_waterdrop": ("Waterdrop (flow path) polylines downhill from points on a surface.",
+                              {"surface": "", "points": "[[x,y], ...]", "kind?": "polyline2d (default) | polyline3d", "layer?": ""}),
     },
     "Alignments": {
         "alignment_create": ("Create an alignment from PI points (straight tangents; optional curve radius at every PI).",
                              {"name": "", "points": "[[x,y], ...]", "radius?": "curve radius at each PI", "site?": "default siteless",
                               "layer?": "", "style?": "", "label_set?": "", "description?": ""}),
+        "alignment_from_polyline": ("Create an alignment from an existing polyline (handle), optionally with curves between "
+                                    "its tangents.",
+                                    {"name": "", "handle": "polyline", "add_curves?": "default false", "erase_polyline?": "default false",
+                                     "site?": "", "layer?": "", "style?": "", "label_set?": "", "description?": ""}),
+        "alignment_offset_create": ("Create an offset alignment (negative offset = left), optionally for a station range.",
+                                    {"name": "", "parent": "", "offset": "", "start_station?": "", "end_station?": "", "style?": ""}),
+        "superelevation_slope_set": ("Change the cross slope of one lane or shoulder at an existing superelevation critical "
+                                     "station (see get_superelevation).",
+                                     {"alignment": "", "station": "", "slope_percent": "e.g. -2.5",
+                                      "segment?": "RightInLaneCrossSlope (default) | RightOutLaneCrossSlope | LeftInLaneCrossSlope | "
+                                                  "LeftOutLaneCrossSlope | ...ShoulderCrossSlope", "tolerance?": "default 0.01"}),
         "profile_create": ("Create a layout profile from PVIs on an alignment.",
                            {"alignment": "", "name": "", "pvis": "[[station, elevation], ...]", **PROFILE_STYLE}),
         "profile_from_surface": ("Create a surface (existing ground) profile.", {"alignment": "", "surface": "", "name": "", **PROFILE_STYLE}),
@@ -432,6 +483,15 @@ EDIT_GROUPS: dict[str, Group] = {
                                   "(e.g. a shallow flat-top manhole for a sanitary list). Nothing changes if it is already there.",
                                   {"parts_list": "", "domain": "pipe | structure", "family": "exact family description, e.g. 'Cylindrical Junction Structure NF SI'",
                                    "sizes?": "[inner diameter or width, ...] in the catalogue units (mm)"}),
+        "network_table": ("Draw a pipe or structure schedule of a network as an AutoCAD table (snapshot of the current data: draw "
+                          "it again after changes). Pipes: from/to, size, material, length, slope, inverts. Structures: rim, "
+                          "sump, depth, inverts in/out.",
+                          {"network": "", "kind?": "pipes (default) | structures | pressure_pipes", "at": XY, "title?": "",
+                           "text_height?": "", "row_height?": "", "column_width?": "", **DRAW_ON}),
+        "hgl_set": ("Set hydraulic / energy grade lines and flow on a gravity network's pipes and structures (e.g. from a "
+                    "SewerGEMS or StormCAD run) so profile views and labels can show them.",
+                    {"network": "", "pipes?": "[{name, hgl_up?, hgl_down?, egl_up?, egl_down?, flow?}, ...]",
+                     "structures?": "[{name, hgl?, egl?}, ...]"}),
         "labels_add": ("Add default labels to the pipes and structures of a gravity network.",
                        {"pipe_network": "", "pipes?": "default true", "structures?": "default true"}),
     },

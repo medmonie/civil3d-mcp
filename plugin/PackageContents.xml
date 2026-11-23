@@ -3,7 +3,7 @@
                     AutodeskProduct="AutoCAD"
                     Name="C3dMcpBridge"
                     Description="Local MCP bridge for Civil 3D with drawing-scoped edit permission"
-                    AppVersion="0.14.2"
+                    AppVersion="0.15.0"
                     ProductType="Application"
                     Author="Local"
                     ProductCode="{3B8E5A52-7C41-4D0A-9E6F-21A4C7D90B13}"

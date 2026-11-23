@@ -63,6 +63,15 @@ internal static class Registry
         Read("list_pipe_runs", PressureRead.ListPipeRuns);
         Read("list_pressure_part_sizes", PressureRead.ListPressurePartSizes);
         // styles and meta
+        Read("list_point_groups", CivilRead.ListPointGroups);
+        Read("list_point_file_formats", CivilRead.ListPointFileFormats);
+        Read("list_description_keys", CivilRead.ListDescriptionKeys);
+        Read("get_surface_analysis", CivilRead.GetSurfaceAnalysis);
+        Read("get_superelevation", CivilRead.GetSuperelevation);
+        Read("list_intersections", CivilRead.ListIntersections);
+        Read("network_hgl", CivilRead.NetworkHgl);
+        Read("network_interference", CivilRead.NetworkInterference);
+
         Read("list_styles", StyleRead.ListStyles);
         Read("get_style", StyleRead.GetStyle);
         Read("describe_api", ApiRead.DescribeApi);
