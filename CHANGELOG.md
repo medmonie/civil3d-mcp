@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.19.0
+
+Third batch from the Civil 3D API review (roadmap #53, #68). 70 read actions, 130 edit operations. Live test: `tests\run_model.bat`; ALL PASS on Civil 3D 2027 together with `run_civil`, `run_data`, `run_geometry` and `run_extras` in one drawing.
+
+**Corridors**
+- `get_corridor_feature_lines` (#53): feature lines by code over a station range: side, start / end station, plan and 3D length, offset and elevation range, points `[station, offset, elevation, x, y]` (thinned to `max_points`); plus the point / link / shape codes the sections in that range carry.
+- `corridor_feature_line_export`: a corridor feature line (code + index or side) as an alignment, a profile on an alignment, 3D polyline(s), or a static grading feature line.
+- `corridor_points_export`: COGO points at the feature-line points (all codes or chosen ones) in a new point group.
+- `get_corridor_targets` / `corridor_targets_set`: subassembly targets (surface, width / offset, elevation) per region, set to surfaces, alignments, profiles or drawing objects.
+- `corridor_slope_pattern_add`: slope pattern between two corridor feature lines (a style is created when the drawing has none).
+- `corridor_solids_export`: 3D solids (or bodies) from shapes and / or links, for the corridor, a baseline or a region range; returns the total solid volume.
+
+**Surfaces**
+- `surface_definition_add`: contours, DEM files, point groups, drawing objects (points, lines, blocks, text, 3D faces, polyface meshes), wall breaklines, breakline (.flt) files; rebuilds and reports points and elevations.
+- `surface_create_from`: from LandXML, a DEM (grid surface), a .tin file, a cropped area of another surface, or a static copy of a corridor surface.
+- `surface_snapshot`: create / rebuild / remove.
+- `surface_solids_create`: 3D solids to a depth, a fixed elevation or another surface (or to a DWG file after commit); returns the total volume.
+
+**Hydrology**
+- `catchment_create` / `list_catchments`: catchments from a boundary on a surface, flow path traced downhill from a point (or given), percent impervious, runoff coefficient, discharge structure; area, perimeter, flow path length, time of concentration.
+
+**Limits found in the live test**
+- Corridor exports need a site: an exported alignment goes into a site named `Corridor Exports` unless `site` is given. Objects sharing a site interact; a feature line laid over an alignment of the same site was flattened to elevation 0, so grading feature lines are exported siteless by default, as static copies built through the feature line's own points.
+- `TinSurface.CreateByCropping` writes only into another drawing; `surface_create_from` crop pastes the source surface into a new TIN and clips it with a non-destructive outer boundary.
+- Contours need `max_distance` > `weeding_distance`; the Civil 3D dialog defaults (100 / 15 / 4°) are used.
+- `Catchment.ImperviousArea` is a 0-1 fraction; the MCP takes and reports percent.
+- Wall breakline `elevation` is the absolute level of the offset side.
+- A 5 x 5-cell ESRI ASCII grid was refused ("UnableToReadFile"); a 50 x 50 grid was read.
+- `RunoffMethod`, `FlowPathLength`, `AverageSlope` of catchments exist only in the 2027 API; read by reflection (null on 2024 / 2025).
+- Not tested live: `tin_file` source, DEM `null_elevation`, solids written to a DWG file, corridor solids per baseline / region.
+
+**Developer tools**
+- `tools/apitool` also lists public fields (value types such as `WallBreaklineCreationData`).
+
 ## 0.18.0
 
 Second batch from the Civil 3D API review. 67 read actions, 120 edit operations. Live test: `tests\run_extras.bat` (Civil 3D 2027).

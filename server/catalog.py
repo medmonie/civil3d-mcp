@@ -76,6 +76,9 @@ READ_GROUPS: dict[str, Group] = {
         "list_description_keys": ("Description key sets with their keys: code, format, point style, label style, layer.", {}),
         "get_surface_analysis": ("A surface's min/max/mean elevation and its analysis ranges: elevations, slopes and slope "
                                  "arrows (percent) with colours, and watersheds.", {"surface": ""}),
+        "list_catchments": ("Catchment groups and catchments: area, perimeter, percent impervious, runoff coefficient, flow path "
+                            "length, time of concentration, discharge point, surface, discharge structure.",
+                            {"group?": "", "boundary?": "include boundary points", "flow_path?": "include flow path points", "limit?": "default 200"}),
     },
     "Alignments": {
         "list_alignments": ("Alignments (incl. the 'Pipe Run' alignments of pressure networks): type, site, length, stations.", {}),
@@ -117,6 +120,16 @@ READ_GROUPS: dict[str, Group] = {
                                  "to the baseline; links with codes; shapes with codes and area.",
                                  {"corridor": "", "station": "", "baseline?": "name or alignment, default: the first", "codes?": "codes to keep"}),
         "list_assemblies": ("Assemblies with their subassemblies (for corridor_create).", {}),
+        "get_corridor_feature_lines": ("Corridor feature lines by code over a station range: side, start/end station, plan and 3D "
+                                       "length, offset and elevation range, points [station, offset, elevation, x, y]; plus the point, "
+                                       "link and shape codes the sections in that range carry.",
+                                       {"corridor": "", "baseline?": "name or alignment, default: the first", "codes?": "default: all",
+                                        "from_station?": "", "to_station?": "", "points?": "default true",
+                                        "max_points?": "per feature line, default 500 (thinned beyond)", "offset_baselines?": "default false",
+                                        "limit?": "feature lines, default 200"}),
+        "get_corridor_targets": ("Subassembly targets of each region (surface, width/offset, elevation/slope) with the objects they "
+                                 "point at, and the corridor's slope patterns.",
+                                 {"corridor": "", "baseline?": "", "region?": ""}),
     },
     "Gravity networks": {
         "list_pipe_networks": ("Gravity pipe networks: parts list, reference surface/alignment, pipe and structure counts.", {}),
@@ -462,6 +475,34 @@ EDIT_GROUPS: dict[str, Group] = {
                                   "show_in_style?": "surface style to show the analysis in (changes that style for every surface using it)"}),
         "surface_waterdrop": ("Waterdrop (flow path) polylines downhill from points on a surface.",
                               {"surface": "", "points": "[[x,y], ...]", "kind?": "polyline2d (default) | polyline3d", "layer?": ""}),
+        "surface_definition_add": ("Add data to a TIN surface's definition and rebuild it: contours (polylines at their elevation, "
+                                   "or point lists), a DEM file, a point group, drawing objects, wall breaklines, a breakline (.flt) file.",
+                                   {"surface": "", "kind": "contours | dem | point_group | drawing_objects | wall_breaklines | breakline_file",
+                                    "handles?": "contours / drawing objects", "lines?": "contours: [[[x,y,z], ...], ...]",
+                                    "path?": "dem / breakline_file", "null_elevation?": "dem", "point_group?": "",
+                                    "object_type?": "drawing_objects: points | lines | blocks | texts | faces | polyfaces",
+                                    "maintain_edges?": "default true", "description?": "",
+                                    "walls?": "[{handle, elevation | elevations: [per vertex] (absolute level of the wall's offset side), right_side?: default true}]",
+                                    "mid_ordinate?": "default 1", "max_distance?": "supplementing; contours 100, others 0",
+                                    "weeding_distance?": "contours 15, others 0", "weeding_angle?": "contours 4, others 0", "minimize_flat_areas?": "contours, default false", "rebuild?": "default true"}),
+        "surface_create_from": ("Create a surface from a LandXML file (TIN), a DEM (grid surface), a .tin file, a cropped area of "
+                                "another surface, or a static copy of a corridor surface.",
+                                {"name": "", "source": "landxml | dem | tin_file | crop | corridor", "path?": "landxml / dem / tin_file",
+                                 "landxml_surface?": "default: the first in the file", "surface?": "crop: source surface",
+                                 "points?": "crop: [[x,y], ...] polygon", "corridor?": "", "corridor_surface?": "",
+                                 "style?": "", "layer?": "", "description?": ""}),
+        "surface_snapshot": ("Create, rebuild or remove a surface's snapshot.", {"surface": "", "action?": "create (default) | rebuild | remove"}),
+        "surface_solids_create": ("3D solids between a TIN surface and a depth below it, a fixed elevation or another surface; with "
+                                  "file, written to a new DWG after the edit commits instead. Returns the solids' total volume.",
+                                  {"surface": "", "mode": "depth | elevation | surface", "depth?": "", "elevation?": "", "bottom_surface?": "",
+                                   "layer?": "existing layer, default 0", "color?": "ACI, default 256 (ByLayer)", "file?": ".dwg path",
+                                   "overwrite?": "default false"}),
+        "catchment_create": ("Create a catchment from a boundary on a surface, in a group (created if missing), with its flow path "
+                             "traced downhill from a point or given; returns area, flow path length and time of concentration.",
+                             {"name": "", "surface": "", "boundary?": "[[x,y,z], ...]", "handle?": "polyline boundary instead",
+                              "group?": "default 'Catchments'", "style?": "", "layer?": "", "flow_from?": "[x,y] most distant point",
+                              "flow_path?": "[[x,y,z], ...]", "runoff_coefficient?": "", "impervious_percent?": "0-100",
+                              "network?": "for discharge_structure", "discharge_structure?": "structure name"}),
     },
     "Alignments": {
         "alignment_create": ("Create an alignment from PI points: fixed tangents, and at each interior PI a free curve, optionally "
@@ -559,6 +600,32 @@ EDIT_GROUPS: dict[str, Group] = {
                                  {"corridor": "", "surface": "corridor surface name", "feature_line_codes?": "[code] added as breaklines",
                                   "boundaries?": "[{name, extents: true | feature_line_code | points, type?: outside (default) | inside}]",
                                   "masks?": "[{name, feature_line_code | points}]", "rebuild?": "default true"}),
+        "corridor_feature_line_export": ("Export a corridor feature line (by code, and index or side) as an alignment, a profile on "
+                                         "an alignment, 3D polyline(s) or a static grading feature line.",
+                                         {"corridor": "", "code": "", "as": "alignment | profile | polyline3d | grading_feature_line",
+                                          "baseline?": "default: first", "index?": "default 0", "side?": "left | right",
+                                          "name?": "needed for alignment / profile", "alignment?": "profile: the alignment to put it on",
+                                          "alignment_type?": "Centerline (default) | Offset | CurbReturn | Utility | Rail",
+                                          "site?": "created if missing; default: alignment in site 'Corridor Exports', feature line siteless "
+                                                   "(objects sharing a site interact: a feature line over an alignment is flattened)",
+                                          "split?": "polyline3d: one polyline per continuous piece", **PROFILE_STYLE}),
+        "corridor_points_export": ("COGO points at the corridor's feature-line points (all point codes or the codes given), in a new point group.",
+                                   {"corridor": "", "point_group": "new group name", "codes?": "point codes, default: all"}),
+        "corridor_targets_set": ("Point subassembly targets (surface, width/offset, elevation/slope) of a baseline's regions at "
+                                 "surfaces, alignments, profiles or drawing objects. Names from get_corridor_targets.",
+                                 {"corridor": "", "baseline?": "default: first", "regions?": "default: all",
+                                  "targets": "[{target: name or logical name, subassembly?: part of its name, surfaces? | alignments? | "
+                                             "profiles?: [{alignment, profile}] | handles?, option?: Nearest | Farthest | Flattest | Steepest}]",
+                                  "rebuild?": "default true"}),
+        "corridor_slope_pattern_add": ("A slope pattern between two corridor feature lines.",
+                                       {"corridor": "", "from": "{code, side? | index?, baseline?}", "to": "{code, side? | index?, baseline?}",
+                                        "baseline?": "default for from/to", "style?": "slope pattern style (one is created if the drawing has none)",
+                                        "start_station?": "", "end_station?": "", "clear?": "remove existing slope patterns first"}),
+        "corridor_solids_export": ("3D solids (or bodies) from a corridor's shapes and/or links into this drawing, for the corridor, "
+                                   "a baseline or a region (optionally a station range); returns the solids' total volume.",
+                                   {"corridor": "", "baseline?": "", "region?": "", "start_station?": "region range", "end_station?": "",
+                                    "shapes?": "default true", "links?": "default false", "bodies?": "default false (3D solids)",
+                                    "sweep?": "default false", "include_codes?": "", "exclude_codes?": "", "layer?": ""}),
     },
     "Styles and presentation": {
         "labels_place": ("Place Civil 3D labels. Each item has a kind: station_offset {alignment, at}; alignment_geometry {alignment, "

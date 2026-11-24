@@ -53,6 +53,14 @@ class P : ISignatureTypeProvider<string, object>
                     var ps = sig.ParameterTypes.Select((pt, i) => pt + " " + (i < names.Count ? names[i] : "p" + i));
                     lines.Add($"  {((m.Attributes & MethodAttributes.Static) != 0 ? "static " : "")}{sig.ReturnType} {n}({string.Join(", ", ps)})");
                 }
+                foreach (var fh in t.GetFields())
+                {
+                    var fd = r.GetFieldDefinition(fh);
+                    if ((fd.Attributes & FieldAttributes.FieldAccessMask) != FieldAttributes.Public) continue;
+                    string n = r.GetString(fd.Name);
+                    if (rxM != null && !rxM.IsMatch(n)) continue;
+                    lines.Add($"  field {((fd.Attributes & FieldAttributes.Static) != 0 ? "static " : "")}{fd.DecodeSignature(prov, null)} {n}");
+                }
                 foreach (var l in lines.Distinct().OrderBy(x => x)) Console.WriteLine(l);
             }
         }

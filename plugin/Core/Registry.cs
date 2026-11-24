@@ -68,6 +68,9 @@ internal static class Registry
         Read("get_user_property_values", DataRead.GetUserPropertyValues);
         Read("get_sections", DataRead.GetSections);
         Read("get_corridor_section", DataRead.GetCorridorSection);
+        Read("get_corridor_feature_lines", ModelRead.GetCorridorFeatureLines);
+        Read("get_corridor_targets", ModelRead.GetCorridorTargets);
+        Read("list_catchments", ModelRead.ListCatchments);
         Read("get_alignment_geometry", GeometryRead.GetAlignmentGeometry);
         Read("get_profile_geometry", GeometryRead.GetProfileGeometry);
         Read("get_feature_line", GeometryRead.GetFeatureLine);

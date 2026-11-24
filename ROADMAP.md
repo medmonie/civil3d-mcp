@@ -108,7 +108,7 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 | 50 | ✅ 0.16 **Section data** | `get_sections`, `get_corridor_section`. |
 | 51 | ✅ 0.16 **Surface sampling** | `sample_surface`, `pipe_ground_profile`. |
 | 52 | **Selection and view control** | Highlight, select or zoom to objects so the client can show what it found. |
-| 53 | **Corridor feature lines and codes along a station range** | Beyond a single station. |
+| 53 | ✅ 0.19 **Corridor feature lines and codes along a station range** | `get_corridor_feature_lines`. |
 | 54 | ✅ 0.17 **Earthwork / material quantities** | `material_list_create`, `get_material_volumes`. |
 | 55 | ✅ 0.17 **Vertical curves** | Curves in `profile_create`, `profile_pvis_set`, `get_profile_geometry`. |
 | 56 | ✅ 0.17 **Full alignment geometry** | Spirals, station equations, design speeds, widenings, `get_alignment_geometry`. |
@@ -119,11 +119,11 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 | 61 | ✅ 0.17 **User-defined property definitions** | `udp_create`. |
 | 62 | ✅ 0.17 **Point export** | `points_export`. |
 | 63 | ✅ 0.18 **Derived profiles** | `profile_derive` (corridor feature line, offset at a slope, static copy). |
-| 64 | ✅ 0.18 **Corridor detail** | `corridor_baseline_add`, `corridor_region_edit`, `corridor_surface_set`. Slope patterns not yet. |
+| 64 | ✅ 0.18 **Corridor detail** | `corridor_baseline_add`, `corridor_region_edit`, `corridor_surface_set`. Slope patterns in 0.19. |
 | 65 | ✅ 0.18 **Surface extraction** | `surface_extract`. |
 | 66 | ✅ 0.18 **Network extras** | `pipe_curved_add`, `part_swap`, `parts_to_section_views`, `pressure_run_edit`. |
 | 67 | ✅ 0.18 **Section volume tables** | `section_volume_tables`. |
-| 68 | **Next from the API review** | Corridor feature-line export (alignment / polyline / COGO points), corridor targets and slope patterns, surface definition from contours / DEM / point groups, catchments, solids for BIM. |
+| 68 | ✅ 0.19 **Next from the API review** | `corridor_feature_line_export`, `corridor_points_export`, `get_corridor_targets` / `corridor_targets_set`, `corridor_slope_pattern_add`, `corridor_solids_export`, `surface_definition_add`, `surface_create_from`, `surface_snapshot`, `surface_solids_create`, `catchment_create` / `list_catchments`. |
 
 ### P2 — useful
 
@@ -131,10 +131,10 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 |---|---|---|---|
 | 9 | ~~Plan and profile sheets~~ | → #36 | Moved to the sheet section. |
 | 10 | **CAD to network** | M | Turn polylines and blocks from a consultant's CAD into a gravity network, using block positions and attribute levels. |
-| 11 | **LandXML import / export** | M | Exchange surfaces, alignments and networks with other software and authorities. |
-| 12 | **Surface from contours / DEM** | M | Build a surface from contour polylines with their elevations, or from a DEM file. |
+| 11 | **LandXML import / export** | M | Surface import done in 0.19 (`surface_create_from`). Exchange surfaces, alignments and networks with other software and authorities. |
+| 12 | ✅ 0.19 **Surface from contours / DEM** | M | Build a surface from contour polylines with their elevations, or from a DEM file. |
 | 13 | **Data shortcuts** | M | Create and reference data shortcuts so a network or surface can be shared across drawings. |
-| 14 | **Corridor targets** | M | Width and elevation targets (edge of pavement, ditch) from alignments, profiles and polylines. |
+| 14 | ✅ 0.19 **Corridor targets** | M | Width and elevation targets (edge of pavement, ditch) from alignments, profiles and polylines. |
 | 15 | **Profile view labels for parts** | S | Pipe labels (size, slope, length) and structure labels (name, rim, inverts) inside profile views. |
 | 16 | **Earthwork volumes for corridors** | M | Cut and fill between existing ground and the corridor surface, by station range. |
 | 17 | **Batch drawings** | M | Run the same read or QA action over every drawing in a folder, e.g. checking layer standards on a submittal set. |
@@ -160,7 +160,7 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 The MCP gives facts and actions; design checks, quantities and code compliance are done by the AI client (as skills
 kept outside this repository) with the project's criteria.
 
-1. **Data access still missing:** #52 selection and view control, #53 corridor data along a station range, #11 LandXML, #13 data shortcuts.
+1. **Data access still missing:** #52 selection and view control, #11 LandXML export and alignment / network import, #13 data shortcuts.
 2. **Round-trips:** #8 model vs drawing differences (facts), #6 band table refresh, #15 profile view labels for parts.
 3. **Reach:** #5 Civil 3D 2026 (2024 / 2025 done in 0.12).
 

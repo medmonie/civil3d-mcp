@@ -4,7 +4,7 @@ Generated from `server/catalog.py` by `tools/gen_docs.py` - do not edit by hand.
 
 Everything goes through one MCP tool: `civil3d(action, params)`. A parameter ending in `?` is optional.
 
-## Read actions (67) - never change the drawing
+## Read actions (70) - never change the drawing
 
 ### Drawing (AutoCAD)
 
@@ -49,6 +49,7 @@ Everything goes through one MCP tool: `civil3d(action, params)`. A parameter end
 | `list_point_file_formats` | - | Point file formats available for points_import (name, extension, delimiter). |
 | `list_description_keys` | - | Description key sets with their keys: code, format, point style, label style, layer. |
 | `get_surface_analysis` | `surface` | A surface's min/max/mean elevation and its analysis ranges: elevations, slopes and slope arrows (percent) with colours, and watersheds. |
+| `list_catchments` | `group?`<br>`boundary?` include boundary points<br>`flow_path?` include flow path points<br>`limit?` default 200 | Catchment groups and catchments: area, perimeter, percent impervious, runoff coefficient, flow path length, time of concentration, discharge point, surface, discharge structure. |
 
 ### Alignments
 
@@ -77,6 +78,8 @@ Everything goes through one MCP tool: `civil3d(action, params)`. A parameter end
 | `list_corridors` | - | Corridors: baselines with their regions and assemblies, corridor surfaces, out-of-date flag. |
 | `get_corridor_section` | `corridor`<br>`station`<br>`baseline?` name or alignment, default: the first<br>`codes?` codes to keep | A corridor's section at a station (nearest frequency station): points with codes, offset and elevation to the baseline; links with codes; shapes with codes and area. |
 | `list_assemblies` | - | Assemblies with their subassemblies (for corridor_create). |
+| `get_corridor_feature_lines` | `corridor`<br>`baseline?` name or alignment, default: the first<br>`codes?` default: all<br>`from_station?`<br>`to_station?`<br>`points?` default true<br>`max_points?` per feature line, default 500 (thinned beyond)<br>`offset_baselines?` default false<br>`limit?` feature lines, default 200 | Corridor feature lines by code over a station range: side, start/end station, plan and 3D length, offset and elevation range, points [station, offset, elevation, x, y]; plus the point, link and shape codes the sections in that range carry. |
+| `get_corridor_targets` | `corridor`<br>`baseline?`<br>`region?` | Subassembly targets of each region (surface, width/offset, elevation/slope) with the objects they point at, and the corridor's slope patterns. |
 
 ### Gravity networks
 
@@ -131,7 +134,7 @@ Everything goes through one MCP tool: `civil3d(action, params)`. A parameter end
 
 Run a batch of operations on a specific open drawing. First call get_drawing_info and verify the drawing name. Pass its target and new_edit_request_id as target and request_id. Use the target from the reads used to prepare this edit. A changed session or active drawing stops the edit. The drawing operations share one transaction. dry_run aborts that transaction after validation. File outputs run after commit. Editing requires permission for the target drawing. If the response is interrupted, check get_edit_status with the original target and request_id; resend only with the same parameters and request ID for a retry. A request whose state is 'error' changed nothing (for example Civil 3D was busy) and may be resent with the same request ID.
 
-## Edit operations (120) - items of `operations`
+## Edit operations (130) - items of `operations`
 
 ### Layers and existing objects
 
@@ -236,6 +239,11 @@ Run a batch of operations on a specific open drawing. First call get_drawing_inf
 | `description_key_create` | `code`<br>`key_set?` default 'Default'<br>`format?` full description, default $*<br>`point_style?`<br>`label_style?`<br>`layer?`<br>`apply_to_points?` re-apply keys to all points<br>`if_exists?` error (default) \| replace | Add a description key (code, e.g. 'MH*') to a key set (created if missing) with the point style, label style and layer it applies. |
 | `surface_analysis_set` | `surface`<br>`type?` elevations (default) \| slopes \| slope_arrows<br>`ranges?` [{min, max, color?: ACI}, ...] elevations in drawing units, slopes in percent<br>`count?` default 8 (without ranges)<br>`max_slope?` percent, default 30 (slopes without ranges)<br>`show_in_style?` surface style to show the analysis in (changes that style for every surface using it) | Elevation, slope or slope-arrow banding of a surface: ranges with colours (or 'count' equal ranges), and optionally turn that display on in a surface style and give it to the surface. |
 | `surface_waterdrop` | `surface`<br>`points` [[x,y], ...]<br>`kind?` polyline2d (default) \| polyline3d<br>`layer?` | Waterdrop (flow path) polylines downhill from points on a surface. |
+| `surface_definition_add` | `surface`<br>`kind` contours \| dem \| point_group \| drawing_objects \| wall_breaklines \| breakline_file<br>`handles?` contours / drawing objects<br>`lines?` contours: [[[x,y,z], ...], ...]<br>`path?` dem / breakline_file<br>`null_elevation?` dem<br>`point_group?`<br>`object_type?` drawing_objects: points \| lines \| blocks \| texts \| faces \| polyfaces<br>`maintain_edges?` default true<br>`description?`<br>`walls?` [{handle, elevation \| elevations: [per vertex] (absolute level of the wall's offset side), right_side?: default true}]<br>`mid_ordinate?` default 1<br>`max_distance?` supplementing; contours 100, others 0<br>`weeding_distance?` contours 15, others 0<br>`weeding_angle?` contours 4, others 0<br>`minimize_flat_areas?` contours, default false<br>`rebuild?` default true | Add data to a TIN surface's definition and rebuild it: contours (polylines at their elevation, or point lists), a DEM file, a point group, drawing objects, wall breaklines, a breakline (.flt) file. |
+| `surface_create_from` | `name`<br>`source` landxml \| dem \| tin_file \| crop \| corridor<br>`path?` landxml / dem / tin_file<br>`landxml_surface?` default: the first in the file<br>`surface?` crop: source surface<br>`points?` crop: [[x,y], ...] polygon<br>`corridor?`<br>`corridor_surface?`<br>`style?`<br>`layer?`<br>`description?` | Create a surface from a LandXML file (TIN), a DEM (grid surface), a .tin file, a cropped area of another surface, or a static copy of a corridor surface. |
+| `surface_snapshot` | `surface`<br>`action?` create (default) \| rebuild \| remove | Create, rebuild or remove a surface's snapshot. |
+| `surface_solids_create` | `surface`<br>`mode` depth \| elevation \| surface<br>`depth?`<br>`elevation?`<br>`bottom_surface?`<br>`layer?` existing layer, default 0<br>`color?` ACI, default 256 (ByLayer)<br>`file?` .dwg path<br>`overwrite?` default false | 3D solids between a TIN surface and a depth below it, a fixed elevation or another surface; with file, written to a new DWG after the edit commits instead. Returns the solids' total volume. |
+| `catchment_create` | `name`<br>`surface`<br>`boundary?` [[x,y,z], ...]<br>`handle?` polyline boundary instead<br>`group?` default 'Catchments'<br>`style?`<br>`layer?`<br>`flow_from?` [x,y] most distant point<br>`flow_path?` [[x,y,z], ...]<br>`runoff_coefficient?`<br>`impervious_percent?` 0-100<br>`network?` for discharge_structure<br>`discharge_structure?` structure name | Create a catchment from a boundary on a surface, in a group (created if missing), with its flow path traced downhill from a point or given; returns area, flow path length and time of concentration. |
 
 ### Alignments
 
@@ -271,6 +279,11 @@ Run a batch of operations on a specific open drawing. First call get_drawing_inf
 | `corridor_baseline_add` | `corridor`<br>`alignment`<br>`profile`<br>`name?` default BL-n<br>`assembly?`<br>`region?` default RG-1<br>`start_station?`<br>`end_station?`<br>`rebuild?` default true | Add a baseline (alignment + profile) to a corridor, with a first region when an assembly is given. |
 | `corridor_region_edit` | `corridor`<br>`baseline?` default: first<br>`add?` {name, assembly, start_station, end_station}<br>`merge?` [first region, last region]<br>`region?` region to change<br>`start_station?`<br>`end_station?`<br>`split_at?` station<br>`add_stations?` [station \| {station, description}]<br>`delete_stations?` [station]<br>`frequency?` {tangents?, curves?, spirals?, profile_curves?}<br>`rebuild?` default true | Regions of a baseline: add, merge, split at a station, move start/end, add or delete extra stations, assembly frequency. |
 | `corridor_surface_set` | `corridor`<br>`surface` corridor surface name<br>`feature_line_codes?` [code] added as breaklines<br>`boundaries?` [{name, extents: true \| feature_line_code \| points, type?: outside (default) \| inside}]<br>`masks?` [{name, feature_line_code \| points}]<br>`rebuild?` default true | Boundaries, masks and breakline codes of a corridor surface. |
+| `corridor_feature_line_export` | `corridor`<br>`code`<br>`as` alignment \| profile \| polyline3d \| grading_feature_line<br>`baseline?` default: first<br>`index?` default 0<br>`side?` left \| right<br>`name?` needed for alignment / profile<br>`alignment?` profile: the alignment to put it on<br>`alignment_type?` Centerline (default) \| Offset \| CurbReturn \| Utility \| Rail<br>`site?` created if missing; default: alignment in site 'Corridor Exports', feature line siteless (objects sharing a site interact: a feature line over an alignment is flattened)<br>`split?` polyline3d: one polyline per continuous piece<br>`layer?`<br>`style?`<br>`label_set?` | Export a corridor feature line (by code, and index or side) as an alignment, a profile on an alignment, 3D polyline(s) or a static grading feature line. |
+| `corridor_points_export` | `corridor`<br>`point_group` new group name<br>`codes?` point codes, default: all | COGO points at the corridor's feature-line points (all point codes or the codes given), in a new point group. |
+| `corridor_targets_set` | `corridor`<br>`baseline?` default: first<br>`regions?` default: all<br>`targets` [{target: name or logical name, subassembly?: part of its name, surfaces? \| alignments? \| profiles?: [{alignment, profile}] \| handles?, option?: Nearest \| Farthest \| Flattest \| Steepest}]<br>`rebuild?` default true | Point subassembly targets (surface, width/offset, elevation/slope) of a baseline's regions at surfaces, alignments, profiles or drawing objects. Names from get_corridor_targets. |
+| `corridor_slope_pattern_add` | `corridor`<br>`from` {code, side? \| index?, baseline?}<br>`to` {code, side? \| index?, baseline?}<br>`baseline?` default for from/to<br>`style?` slope pattern style (one is created if the drawing has none)<br>`start_station?`<br>`end_station?`<br>`clear?` remove existing slope patterns first | A slope pattern between two corridor feature lines. |
+| `corridor_solids_export` | `corridor`<br>`baseline?`<br>`region?`<br>`start_station?` region range<br>`end_station?`<br>`shapes?` default true<br>`links?` default false<br>`bodies?` default false (3D solids)<br>`sweep?` default false<br>`include_codes?`<br>`exclude_codes?`<br>`layer?` | 3D solids (or bodies) from a corridor's shapes and/or links into this drawing, for the corridor, a baseline or a region (optionally a station range); returns the solids' total volume. |
 
 ### Styles and presentation
 
