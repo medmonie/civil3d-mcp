@@ -13,6 +13,7 @@ internal static class AlignmentOps
         ops["sample_lines_create"] = SampleLinesCreate;
         ops["section_views_create"] = SectionViewsCreate;
         ops["sample_sources_set"] = SampleSourcesSet;
+        ops["profile_pvis_set"] = ProfilePvisSet;
     }
 
     private const double StationTolerance = 1e-6;
@@ -44,23 +45,120 @@ internal static class AlignmentOps
         // Fixed tangents between the PIs, then a free curve between each pair of tangents.
         var tangents = new List<CivilDb.AlignmentLine>();
         for (int i = 0; i + 1 < pts.Count; i++) tangents.Add(al.Entities.AddFixedLine(pts[i], pts[i + 1]));
-        int curves = 0;
-        if (radius is double r)
-            for (int i = 0; i + 1 < tangents.Count; i++)
+        // Curve at each interior PI: 'curves' (one entry per interior PI) overrides 'radius' / 'spiral_in' / 'spiral_out'.
+        var perPi = ArrParam(p, "curves", 5000);
+        if (perPi.Count > 0 && perPi.Count != tangents.Count - 1)
+            throw new ArgumentException($"alignment_create: 'curves' needs one entry per interior PI ({tangents.Count - 1}), got {perPi.Count}.");
+        double spIn = DblParam(p, "spiral_in") ?? 0, spOut = DblParam(p, "spiral_out") ?? spIn;
+        var spType = SpiralTypeParam(p);
+        int curves = 0, spirals = 0;
+        for (int i = 0; i + 1 < tangents.Count; i++)
+        {
+            double? rr = radius; double s1 = spIn, s2 = spOut;
+            if (perPi.Count > 0)
             {
-                try
-                {
-                    al.Entities.AddFreeCurve(tangents[i].EntityId, tangents[i + 1].EntityId, r,
-                        CivilDb.CurveParamType.Radius, false, CivilDb.CurveType.Compound);
-                    curves++;
-                }
-                catch (Exception ex) { c.Warn($"no curve at vertex {i + 2} (radius {r} does not fit): {ex.Message}"); }
+                var e = perPi[i];
+                if (e.ValueKind == JsonValueKind.Null) continue;
+                rr = e.ValueKind == JsonValueKind.Number ? e.GetDouble() : PositiveParam(e, "radius");
+                s1 = DblParam(e, "spiral_in") ?? 0; s2 = DblParam(e, "spiral_out") ?? s1;
             }
+            if (rr is not double r || r <= 0) continue;
+            try
+            {
+                if (s1 > 0 || s2 > 0)
+                {
+                    al.Entities.AddFreeSCS(tangents[i].EntityId, tangents[i + 1].EntityId, s1, s2, CivilDb.SpiralParamType.Length, r, false, spType);
+                    spirals += (s1 > 0 ? 1 : 0) + (s2 > 0 ? 1 : 0);
+                }
+                else al.Entities.AddFreeCurve(tangents[i].EntityId, tangents[i + 1].EntityId, r,
+                        CivilDb.CurveParamType.Radius, false, CivilDb.CurveType.Compound);
+                curves++;
+            }
+            catch (Exception ex) { c.Warn($"no curve at vertex {i + 2} (radius {r}, spirals {s1}/{s2} do not fit): {ex.Message}"); }
+        }
         if (StrParam(p, "description") is string d) al.Description = d;
-        return new { alignment = name, handle = H(id), tangents = tangents.Count, curves, length = Safe(() => R3(al.Length)) };
+        return new { alignment = name, handle = H(id), tangents = tangents.Count, curves, spirals, length = Safe(() => R3(al.Length)) };
     }
 
+    internal static Autodesk.Civil.SpiralType SpiralTypeParam(JsonElement p) =>
+        EnumParam(p, "spiral_type", Autodesk.Civil.SpiralType.Clothoid);
+
     // ---------------------------------------------------------------- profiles
+
+    /// <summary>A PVI as given: [station, elevation] or {station, elevation, curve?, length?, k?, radius?, lengths?}.</summary>
+    internal sealed record PviSpec(double Station, double? Elevation, string Curve, double? Length, double? K, double? Radius, double[]? Lengths);
+
+    internal static List<PviSpec> ParsePvis(JsonElement p, string name, string op, bool needElevation = true) =>
+        ArrParam(p, name, 5000).Select((e, i) =>
+        {
+            if (e.ValueKind == JsonValueKind.Array)
+            {
+                if (e.GetArrayLength() != 2 || e[0].ValueKind != JsonValueKind.Number || e[1].ValueKind != JsonValueKind.Number)
+                    throw new ArgumentException($"{op}: pvi {i + 1} must be [station, elevation] or an object.");
+                return new PviSpec(e[0].GetDouble(), e[1].GetDouble(), "none", null, null, null, null);
+            }
+            if (e.ValueKind != JsonValueKind.Object) throw new ArgumentException($"{op}: pvi {i + 1} must be [station, elevation] or an object.");
+            double st = NeedDbl(e, "station");
+            double? el = DblParam(e, "elevation");
+            if (needElevation && el == null) throw new ArgumentException($"{op}: pvi {i + 1} needs 'elevation'.");
+            double[]? lens = Has(e, "lengths") ? NumList(e, "lengths", 2).ToArray() : null;
+            if (lens != null && lens.Length != 2) throw new ArgumentException($"{op}: pvi {i + 1}: 'lengths' is [length before, length after].");
+            string curve = Choice(e, "curve", lens != null ? "asymmetric" : Has(e, "radius") ? "circular" : (Has(e, "length") || Has(e, "k")) ? "parabola" : "none",
+                                  "none", "parabola", "circular", "asymmetric");
+            var spec = new PviSpec(st, el, curve, PositiveParam(e, "length"), PositiveParam(e, "k"), PositiveParam(e, "radius"), lens);
+            if (curve == "parabola" && spec.Length == null && spec.K == null) throw new ArgumentException($"{op}: pvi {i + 1}: a parabola needs 'length' or 'k'.");
+            if (curve == "circular" && spec.Radius == null && spec.Length == null) throw new ArgumentException($"{op}: pvi {i + 1}: a circular curve needs 'radius'.");
+            if (curve == "asymmetric" && lens == null) throw new ArgumentException($"{op}: pvi {i + 1}: an asymmetric parabola needs 'lengths'.");
+            return spec;
+        }).ToList();
+
+    /// <summary>Puts the vertical curves on PVIs that already exist (their neighbours give the grades).</summary>
+    internal static List<object> ApplyCurves(EditContext c, CivilDb.Profile pr, IEnumerable<PviSpec> specs)
+    {
+        var done = new List<object>();
+        foreach (var v in specs.Where(v => v.Curve != "none"))
+        {
+            var pvi = FindPvi(pr, v.Station) ?? throw new ArgumentException($"No PVI at station {v.Station}.");
+            double st = pvi.Station, el = pvi.Elevation;
+            double gIn = pvi.GradeIn, gOut = pvi.GradeOut;
+            double a = Math.Abs(gOut - gIn) * 100.0;              // grade change in percent
+            try
+            {
+                pr.PVIs.RemoveAt(st, el);
+                switch (v.Curve)
+                {
+                    case "parabola":
+                        double len = v.Length ?? v.K!.Value * a;
+                        if (len <= 0) throw new ArgumentException("no grade change at this PVI");
+                        pr.PVIs.AddPVISymParabola(st, el, len);
+                        done.Add(new { station = R3(st), curve = v.Curve, length = R3(len), k = a > 0 ? R3(len / a) : (double?)null });
+                        break;
+                    case "circular":
+                        double rad = v.Radius ?? (a > 0 ? v.Length!.Value / (a / 100.0) : 0);
+                        pr.PVIs.AddPVIArc(st, el, rad);
+                        done.Add(new { station = R3(st), curve = v.Curve, radius = R3(rad) });
+                        break;
+                    default:
+                        pr.PVIs.AddPVIAsymParabola(st, el, v.Lengths![0], v.Lengths[1]);
+                        done.Add(new { station = R3(st), curve = v.Curve, lengths = v.Lengths });
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (FindPvi(pr, st) == null) pr.PVIs.AddPVI(st, el);   // put the plain PVI back
+                c.Warn($"no {v.Curve} curve at station {R3(st)}: {ex.Message}");
+            }
+        }
+        return done;
+    }
+
+    internal static CivilDb.ProfilePVI? FindPvi(CivilDb.Profile pr, double station)
+    {
+        for (int i = 0; i < pr.PVIs.Count; i++)
+            if (Math.Abs(pr.PVIs[i].Station - station) < 1e-3) return pr.PVIs[i];
+        return null;
+    }
 
     private static ObjectId ProfileStyle(EditContext c, JsonElement p) =>
         Styles.Id(c.Civ.Styles.ProfileStyles, StrParam(p, "style"), "profile style");
@@ -72,20 +170,54 @@ internal static class AlignmentOps
     {
         string name = NeedStr(p, "name");
         var al = FindAlignment(c.Civ, c.Tr, NeedStr(p, "alignment"));
-        var pvis = NeedArr(p, "pvis", 5000).Select((e, i) =>
-        {
-            if (e.ValueKind != JsonValueKind.Array || e.GetArrayLength() != 2 || e[0].ValueKind != JsonValueKind.Number || e[1].ValueKind != JsonValueKind.Number)
-                throw new ArgumentException($"profile_create: pvi {i + 1} must be [station, elevation].");
-            return (station: e[0].GetDouble(), elevation: e[1].GetDouble());
-        }).OrderBy(v => v.station).ToList();
+        var pvis = ParsePvis(p, "pvis", "profile_create").OrderBy(v => v.Station).ToList();
         if (pvis.Count < 2) throw new ArgumentException("profile_create: at least 2 PVIs are needed.");
-        if (!OnAlignment(al, pvis[0].station) || !OnAlignment(al, pvis[^1].station))
+        if (!OnAlignment(al, pvis[0].Station) || !OnAlignment(al, pvis[^1].Station))
             throw new ArgumentException($"profile_create: PVI stations must lie within the alignment ({StationRange(al)}).");
 
         var id = CivilDb.Profile.CreateByLayout(name, al.ObjectId, c.Layer(p), ProfileStyle(c, p), ProfileLabelSet(c, p));
         var pr = (CivilDb.Profile)c.Tr.GetObject(id, OpenMode.ForWrite);
-        foreach (var (station, elevation) in pvis) pr.PVIs.AddPVI(station, elevation);
-        return new { alignment = al.Name, profile = name, handle = H(id), pvis = pvis.Count };
+        foreach (var v in pvis) pr.PVIs.AddPVI(v.Station, v.Elevation!.Value);
+        var curves = ApplyCurves(c, pr, pvis);
+        return new { alignment = al.Name, profile = name, handle = H(id), pvis = pvis.Count, curves };
+    }
+
+    /// <summary>Add, change or remove PVIs of a layout profile, with or without vertical curves.</summary>
+    private static object ProfilePvisSet(EditContext c, JsonElement p)
+    {
+        var al = FindAlignment(c.Civ, c.Tr, NeedStr(p, "alignment"));
+        var pr = FindProfile(c.Tr, al, NeedStr(p, "profile"), OpenMode.ForWrite);
+        if (pr.ProfileType != CivilDb.ProfileType.FG)
+            throw new ArgumentException($"profile_pvis_set: '{pr.Name}' is a {pr.ProfileType} profile; only layout profiles have editable PVIs.");
+        var removed = new List<double>();
+        foreach (double st in Has(p, "remove") ? NumList(p, "remove", 5000) : new List<double>())
+        {
+            var pvi = FindPvi(pr, st) ?? throw new ArgumentException($"profile_pvis_set: no PVI at station {st}.");
+            pr.PVIs.RemoveAt(pvi.Station, pvi.Elevation);
+            removed.Add(R3(st));
+        }
+        var specs = ParsePvis(p, "pvis", "profile_pvis_set", needElevation: false);
+        int added = 0, changed = 0;
+        foreach (var v in specs)
+        {
+            if (!OnAlignment(al, v.Station)) throw new ArgumentException($"profile_pvis_set: station {v.Station} is off the alignment ({StationRange(al)}).");
+            var pvi = FindPvi(pr, v.Station);
+            if (pvi != null)
+            {
+                double el = v.Elevation ?? pvi.Elevation;
+                pr.PVIs.RemoveAt(pvi.Station, pvi.Elevation);   // also drops any curve; ApplyCurves puts the requested one back
+                pr.PVIs.AddPVI(v.Station, el);
+                changed++;
+            }
+            else
+            {
+                if (v.Elevation == null) throw new ArgumentException($"profile_pvis_set: new PVI at {v.Station} needs 'elevation'.");
+                pr.PVIs.AddPVI(v.Station, v.Elevation.Value);
+                added++;
+            }
+        }
+        var curves = ApplyCurves(c, pr, specs);
+        return new { alignment = al.Name, profile = pr.Name, added, changed, removed, curves, pvis = pr.PVIs.Count };
     }
 
     private static object ProfileFromSurface(EditContext c, JsonElement p)

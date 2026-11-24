@@ -290,13 +290,13 @@ internal static class DataRead
 
     // ---------------------------------------------------------------- surface sampling
 
-    private static CivilDb.TinSurface Tin(Transaction tr, string name)
+    internal static CivilDb.TinSurface Tin(Transaction tr, string name)
     {
         var s = FindSurface(Civ, tr, name);
         return s as CivilDb.TinSurface ?? throw new ArgumentException($"Surface '{s.Name}' is a {s.GetType().Name}; only TIN surfaces are supported.");
     }
 
-    private static double? Elev(CivilDb.TinSurface tin, double x, double y)
+    internal static double? Elev(CivilDb.TinSurface tin, double x, double y)
     {
         try { return tin.FindElevationAtXY(x, y); } catch { return null; }
     }

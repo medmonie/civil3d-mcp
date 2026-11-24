@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.17.0
+
+Road geometry, earthwork quantities and plan-production additions from the Civil 3D API review. 67 read actions, 110 edit operations. Live test: `tests\run_geometry.bat` (ALL PASS on Civil 3D 2027).
+
+**Quantities**
+- `material_list_create`: a material list on a sample line group, materials from surfaces (base / compare / above / below) and corridor shapes, with factors and the volume method. The surfaces are switched to sampled.
+- `get_material_volumes`: cut / fill (earthwork) or material area at each sample line, incremental and cumulative volumes, totals. Civil 3D's own quantity results when it has computed them; otherwise surface materials are computed from the TINs across each sample line by average end area (`source: computed`). Corridor-shape materials need Civil 3D's Compute Materials.
+
+**Profiles**
+- `profile_create` PVIs accept vertical curves: symmetric parabola by `length` or `k`, circular by `radius`, asymmetric by `lengths`.
+- `profile_pvis_set`: add, change (elevation or curve) or remove PVIs of a layout profile.
+- `get_profile_geometry`: PVIs with grades, tangents with grade, curves with length, K, grade change and high / low point.
+
+**Alignments**
+- `alignment_create`: spiral-curve-spiral at each PI (`spiral_in`, `spiral_out`, `spiral_type`) and per-PI `curves`.
+- `alignment_set`: station equations, design speeds, widenings of offset alignments.
+- `alignment_connected_create`: connected alignment (curb return) between two alignments; the building block of an intersection.
+- `get_alignment_geometry`: every line, curve and spiral with stations, radius, delta, PI, A-value; station equations, design speeds, offset and connected parents.
+
+**Feature lines**
+- `feature_line_edit`: elevations from a surface, at vertices or raised; PIs and elevation points inserted or deleted; curve radii.
+- `get_feature_line`: vertices with plan distance, elevation, grades and radius.
+
+**Plan production and data**
+- `labels_place`: station-offset, alignment geometry (every line / curve / spiral), surface spot elevation, slope and contour labels, parcel area, profile PVI / crest / sag / tangent, station-elevation in a profile view, note labels.
+- `profile_views_create`: several profile views of one alignment, `length` stations each, in rows or columns.
+- `udp_create`: point or parcel user-defined property definitions (string, double with data type, integer, boolean, enum; defaults and bounds).
+- `points_export`: COGO points (all or one point group) to a file in a point file format, after commit.
+
 ## 0.16.0
 
 The MCP is kept to facts and actions; design judgement (codes, project criteria, quantities) belongs to the AI client. This release removes the built-in limits and adds the raw data design checks need. 63 read actions, 101 edit operations.

@@ -58,6 +58,8 @@ READ_GROUPS: dict[str, Group] = {
         "get_surface_elevation": ("Elevation of a TIN surface at (x, y).", {"surface_name": "", "x": "easting", "y": "northing"}),
         "get_surface_volume": ("Cut, fill and net volume of a TIN volume surface.", {"surface_name": ""}),
         "list_cogo_points": ("COGO points: number, name, easting, northing, elevation, description.", {"limit?": "default 200"}),
+        "get_feature_line": ("One feature line's vertices (PI and elevation points) with plan distance, elevation, grade in/out (%) "
+                             "and curve radius, plus min/max elevation and grade.", {"handle?": "", "feature_line?": "name"}),
         "list_feature_lines": ("Feature lines: length, min/max elevation, points.", {"limit?": "default 200"}),
         "list_parcels": ("Parcels of every site: name, number, centroid, extents. Read only.", {"limit?": "default 500"}),
         "list_point_groups": ("Point groups: description, point count, query, style overrides.", {}),
@@ -90,6 +92,18 @@ READ_GROUPS: dict[str, Group] = {
         "get_superelevation": ("Superelevation of an alignment: curves and critical stations with the slope of each lane and "
                                "shoulder (percent).", {"alignment": ""}),
         "list_intersections": ("Corridor intersections: name, location, corridor, number of roads.", {}),
+        "get_alignment_geometry": ("Every line, curve and spiral of an alignment in order: stations, length, start/end, direction; "
+                                   "curves with radius, delta, PI, tangent, external, chord; spirals with A, radius in/out, SPI. "
+                                   "Also station equations, design speeds, and the parent(s) of an offset or connected alignment.",
+                                   {"alignment": ""}),
+        "get_profile_geometry": ("PVIs of a profile (station, elevation, grades in/out in %) and its entities: tangents with grade, "
+                                 "vertical curves (crest/sag) with length, K, grade change, high/low point; asymmetric lengths, radius.",
+                                 {"alignment": "", "profile": ""}),
+        "get_material_volumes": ("Areas and volumes of a sample line group's material lists (see material_list_create): at each "
+                                 "sample line cut/fill (earthwork) or material area, incremental and cumulative volume, and totals. "
+                                 "Civil 3D's own quantity results when it has computed them (source civil3d); otherwise surface "
+                                 "materials are computed from the TINs across each sample line, average end area (source computed).",
+                                 {"alignment": "", "group": "", "material_list?": "default: all", "step?": "sampling step across the line, default 0.25"}),
         "get_sections": ("Ground sections at the sample lines of an alignment: each TIN surface sampled along each sample line (every "
                          "surface breakpoint) as [offset, elevation], offsets from the alignment (negative = left). Needs no sampled "
                          "sources or section views. Corridor sections: get_corridor_section.",
@@ -259,6 +273,8 @@ DRAW_ON = {**ON_LAYER, "layout?": "paper-space layout to draw on (default: model
 IF_EXISTS = {"if_exists?": "error (default) | skip | replace"}
 NETWORK_PROPS = {"reference_surface?": "", "reference_alignment?": "", "description?": ""}
 PROFILE_STYLE = {"layer?": "", "style?": "", "label_set?": ""}
+PVIS = ("[[station, elevation], ...] or [{station, elevation, curve?: parabola|circular|asymmetric|none, length?, k?, "
+        "radius?, lengths?: [before, after]}]; curve inferred from length/k/radius/lengths")
 
 EDIT_GROUPS: dict[str, Group] = {
     "Layers and existing objects": {
@@ -404,6 +420,19 @@ EDIT_GROUPS: dict[str, Group] = {
                                   {"name": "", "base": "base surface", "comparison": "comparison surface"}),
         "feature_line_create": ("Create a feature line from 3D points.",
                                 {"name": "", "points": "[[x,y,z], ...]", "closed?": "", "site?": "created if missing", "layer?": ""}),
+        "feature_line_edit": ("Edit a feature line: elevations from a surface, at vertices (index from get_feature_line) or raised by an "
+                              "amount; PIs and elevation points inserted or deleted; curve radii at vertices.",
+                              {"handle?": "", "feature_line?": "name", "from_surface?": "", "include_intermediate?": "default true",
+                               "elevations?": "[{index, elevation}]", "raise?": "add to every elevation", "insert_pis?": "[[x,y,z]]",
+                               "delete_pis?": "[[x,y]] (nearest PI within 0.01)", "insert_elevation_points?": "[[x,y,z]]",
+                               "delete_elevation_points?": "[[x,y]]", "radii?": "[{index, radius}]"}),
+        "points_export": ("Write COGO points (all, or one point group) to a file in one of the drawing's point file formats; "
+                          "runs after the batch is committed.",
+                          {"path": "", "format": "see list_point_file_formats", "point_group?": "", "overwrite?": "default false"}),
+        "udp_create": ("Define user-defined properties for points or parcels in a classification (created if missing).",
+                       {"for?": "point (default) | parcel", "classification": "",
+                        "properties": "[{name, type?: string|double|integer|boolean|enum, values?: enum values, default?, "
+                                      "description?, min?, max?, data_type?: Double|Distance|Elevation|Area|Percent|...}]"}),
         "points_import": ("Import a point file (survey) with one of the drawing's point file formats, optionally into a point "
                           "group (created if missing). Description keys apply as in Civil 3D.",
                           {"path": "full path of the .txt/.csv/.pnt file", "format": "see list_point_file_formats, e.g. 'PENZD (comma delimited)'",
@@ -430,9 +459,23 @@ EDIT_GROUPS: dict[str, Group] = {
                               {"surface": "", "points": "[[x,y], ...]", "kind?": "polyline2d (default) | polyline3d", "layer?": ""}),
     },
     "Alignments": {
-        "alignment_create": ("Create an alignment from PI points (straight tangents; optional curve radius at every PI).",
-                             {"name": "", "points": "[[x,y], ...]", "radius?": "curve radius at each PI", "site?": "default siteless",
+        "alignment_create": ("Create an alignment from PI points: fixed tangents, and at each interior PI a free curve, optionally "
+                             "with entry/exit spirals (spiral-curve-spiral).",
+                             {"name": "", "points": "[[x,y], ...]", "radius?": "curve radius at every PI",
+                              "spiral_in?": "spiral length before every curve", "spiral_out?": "default = spiral_in",
+                              "curves?": "per interior PI: radius, or {radius, spiral_in?, spiral_out?}, or null for no curve (overrides radius)",
+                              "spiral_type?": "Clothoid (default) | CubicParabola | Bloss | ...", "site?": "default siteless",
                               "layer?": "", "style?": "", "label_set?": "", "description?": ""}),
+        "alignment_set": ("Station equations, design speeds and (offset alignments) widenings of an alignment.",
+                          {"alignment": "", "station_equations?": "[{back: raw station back, ahead, type?: increasing|decreasing}]",
+                           "clear_station_equations?": "", "design_speeds?": "[{station, speed, comment?}]", "clear_design_speeds?": "",
+                           "widenings?": "offset alignments only: [{start, end, offset}]"}),
+        "alignment_connected_create": ("A connected alignment (curb return) joining two alignments at given stations with an arc "
+                                       "or a spiral-curve group. Building block of an intersection (the intersection wizard is not in the API).",
+                                       {"name": "", "incoming": "alignment", "incoming_station": "", "outgoing": "alignment", "outgoing_station": "",
+                                        "radius": "", "curve_group?": "Arc (default) | SCS | SSCS | SCSS | SSCSS | CCC",
+                                        "spiral_in?": "", "spiral_out?": "", "offset_in?": "", "offset_out?": "", "overlap_in?": "default 1", "overlap_out?": "default 1",
+                                        "greater_than_180?": "", "site?": "", "layer?": "", "style?": "", "label_set?": ""}),
         "alignment_from_polyline": ("Create an alignment from an existing polyline (handle), optionally with curves between "
                                     "its tangents.",
                                     {"name": "", "handle": "polyline", "add_curves?": "default false", "erase_polyline?": "default false",
@@ -444,12 +487,19 @@ EDIT_GROUPS: dict[str, Group] = {
                                      {"alignment": "", "station": "", "slope_percent": "e.g. -2.5",
                                       "segment?": "RightInLaneCrossSlope (default) | RightOutLaneCrossSlope | LeftInLaneCrossSlope | "
                                                   "LeftOutLaneCrossSlope | ...ShoulderCrossSlope", "tolerance?": "default 0.01"}),
-        "profile_create": ("Create a layout profile from PVIs on an alignment.",
-                           {"alignment": "", "name": "", "pvis": "[[station, elevation], ...]", **PROFILE_STYLE}),
+        "profile_create": ("Create a layout profile from PVIs on an alignment, with vertical curves where asked.",
+                           {"alignment": "", "name": "", "pvis": PVIS, **PROFILE_STYLE}),
+        "profile_pvis_set": ("Add, change (elevation and/or curve) or remove PVIs of a layout profile. A PVI within 0.001 of a given "
+                             "station is changed; otherwise one is added. curve: 'none' removes a curve.",
+                             {"alignment": "", "profile": "", "pvis?": PVIS + "; elevation optional when changing", "remove?": "[station, ...]"}),
         "profile_from_surface": ("Create a surface (existing ground) profile.", {"alignment": "", "surface": "", "name": "", **PROFILE_STYLE}),
         "profile_view_create": ("Create a profile view of an alignment (shows all its profiles).",
                                 {"alignment": "", "at": "[x,y] lower-left insertion point", "name?": "", "style?": "",
                                  "band_set?": "name, or auto (Standard when it has bands, else the band set with Elevation in its name; default: Standard or the first set)"}),
+        "profile_views_create": ("Several profile views of one alignment, each covering 'length' of stations, laid out in rows or columns.",
+                                 {"alignment": "", "at": "[x,y] insertion point", "length": "stations per view", "per_row?": "default 5",
+                                  "gap_x?": "default 50", "gap_y?": "default 50", "order?": "rows (default) | columns",
+                                  "start_corner?": "UpperLeft (default) | LowerLeft | UpperRight | LowerRight", "name?": "", "style?": "", "band_set?": ""}),
         "profile_view_add_parts": ("Show network parts in a profile view.",
                                    {"profile_view": "", "pipe_network?": "gravity network name", "pressure_network?": "", "handles?": "individual parts",
                                     "pipe_names?": "filter gravity pipes by name", "structure_names?": "filter gravity structures by name"}),
@@ -459,6 +509,12 @@ EDIT_GROUPS: dict[str, Group] = {
         "sample_sources_set": ("Choose which sources (surfaces, corridors, corridor surfaces, networks) a sample line group samples, so "
                                "sections exist for get_sections and section views.",
                                {"alignment": "", "group": "", "sources?": "source names, default: all", "sampled?": "default true"}),
+        "material_list_create": ("A material list on a sample line group (earthwork and structure quantities): materials from surfaces "
+                                 "(with a condition) and/or corridor shapes; the surfaces are switched to sampled. Read the result with get_material_volumes.",
+                                 {"alignment": "", "group": "", "name": "",
+                                  "materials": "[{name, type?: earthwork (default)|cut|fill|cut_fill|structure, items: [{surface, condition?: "
+                                               "above|below|base|compare|include|exclude} | {corridor, shape: shape code}], cut_factor?, fill_factor?, refill_factor?}]",
+                                  "method?": "average_end_area (default) | prismoidal | composite", "if_exists?": "error (default) | replace"}),
         "section_views_create": ("Create a section view for every sample line of a group, laid out in a grid. All section sources of the "
                                  "group (surfaces, corridors, networks) are sampled first.",
                                  {"alignment": "", "group": "sample line group", "at": "[x,y] lower-left of the first view",
@@ -477,6 +533,12 @@ EDIT_GROUPS: dict[str, Group] = {
         "corridor_rebuild": ("Rebuild a corridor.", {"name": ""}),
     },
     "Styles and presentation": {
+        "labels_place": ("Place Civil 3D labels. Each item has a kind: station_offset {alignment, at}; alignment_geometry {alignment, "
+                         "line_style?, curve_style?, spiral_style?} (every line/curve/spiral); surface_spot {surface, points}; "
+                         "surface_slope {surface, points | from+to}; surface_contours {surface, line, interval?}; parcel_area {parcels?}; "
+                         "profile_pvi / profile_crest / profile_sag / profile_tangent {profile_view, profile}; "
+                         "station_elevation {profile_view, station, elevation}; note {at}. style? and marker_style? are optional.",
+                         {"labels": "[{kind, ...}]"}),
         "label_style_create": ("Create (or replace) a label style made of text components. Contents use Civil 3D property fields; "
                                "get_style on an existing style shows the exact syntax.",
                                {"kind": "pipe_label | structure_label | pressure_pipe_label | ...", "name": "",

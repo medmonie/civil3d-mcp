@@ -4,7 +4,7 @@ namespace C3dMcpBridge;
 internal static class BridgeInfo
 {
     /// <summary>Keep PackageContents.xml AppVersion in step; the tests check it.</summary>
-    public const string Version = "0.16.0";
+    public const string Version = "0.17.0";
 
     /// <summary>%LOCALAPPDATA%\C3dMcpBridge: bridge.json (connection details) and audit.log.</summary>
     public static string DataFolder => Path.Combine(
