@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.1
+
+**Installer**
+- `install.bat` and `uninstall.bat` install for the account signed in to the desktop. When the window runs as another account (Run as administrator with someone else's credentials, Run as different user, common on servers and domain controllers), they stop before copying or deleting anything and say which account the window runs as. Previously the plug-in and server went into that other account's profile. They also print which account they install for. No admin rights are needed.
+
 ## 0.19.0
 
 Third batch from the Civil 3D API review (roadmap #53, #68). 70 read actions, 130 edit operations. Live test: `tests\run_model.bat`; ALL PASS on Civil 3D 2027 together with `run_civil`, `run_data`, `run_geometry` and `run_extras` in one drawing.

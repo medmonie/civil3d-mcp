@@ -5,6 +5,7 @@ The package includes the MCP server. Python and the .NET SDK are only needed to 
 
 1. Close Civil 3D.
 2. Double-click install.bat. It installs the Civil 3D plug-in and prints the MCP server's full path.
+   Do not use "Run as administrator": it installs per user, for the account signed in to this desktop.
 3. Connect your MCP client to the printed server path:
    - Claude Desktop: Settings > Developer > Edit Config, add the block from claude_desktop_config_snippet.json
      (saved next to the server), then fully quit and restart Claude.
