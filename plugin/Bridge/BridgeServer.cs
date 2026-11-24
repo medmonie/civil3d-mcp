@@ -43,25 +43,86 @@ internal static class BridgeServer
         _listener.Start();
         _cts = new CancellationTokenSource();
 
-        WriteBridgeFile();
+        // Every instance announces itself in bridge-<pid>.json. Only one is the MCP target (bridge.json): a second
+        // Civil 3D started while another is running does NOT take over silently; MCPSTATUS in it switches explicitly.
+        WriteInstanceFile();
+        var owner = TargetInstance();
+        if (owner == null || owner.Value.pid == Environment.ProcessId) WriteBridgeFile();
 
         var ct = _cts.Token;
         _ = Task.Run(() => AcceptLoop(ct));
     }
+
+    /// <summary>False when another running Civil 3D instance is the MCP target.</summary>
+    public static bool IsTarget => BridgeFileIsMine();
+    private static readonly DateTime StartedUtc = DateTime.UtcNow;
+    private static string InstanceFile(int pid) => Path.Combine(BridgeInfo.DataFolder, $"bridge-{pid}.json");
+
+    private static string ConnectionJson() => JsonSerializer.Serialize(new
+    {
+        port = Port,
+        token = _token,
+        session_id = SessionId,
+        pid = Environment.ProcessId,
+        startedUtc = StartedUtc
+    });
 
     /// <summary>Publishes this Civil 3D instance as the target for MCP clients.</summary>
     public static void WriteBridgeFile()
     {
         if (_listener == null) return;
         Directory.CreateDirectory(BridgeInfo.DataFolder);
-        File.WriteAllText(BridgeFile, JsonSerializer.Serialize(new
+        File.WriteAllText(BridgeFile, ConnectionJson());
+    }
+
+    private static void WriteInstanceFile()
+    {
+        Directory.CreateDirectory(BridgeInfo.DataFolder);
+        File.WriteAllText(InstanceFile(Environment.ProcessId), ConnectionJson());
+    }
+
+    private static bool Alive(int pid)
+    {
+        try { using var pr = System.Diagnostics.Process.GetProcessById(pid); return !pr.HasExited; }
+        catch { return false; }
+    }
+
+    private static (int pid, string session)? ReadInfo(string file)
+    {
+        try
         {
-            port = Port,
-            token = _token,
-            session_id = SessionId,
-            pid = Environment.ProcessId,
-            startedUtc = DateTime.UtcNow
-        }));
+            using var d = JsonDocument.Parse(File.ReadAllText(file));
+            var r = d.RootElement;
+            return (r.GetProperty("pid").GetInt32(), r.TryGetProperty("session_id", out var s) ? s.ToString() : "");
+        }
+        catch { return null; }
+    }
+
+    /// <summary>The instance named in bridge.json, if that process is still running.</summary>
+    private static (int pid, string session)? TargetInstance()
+    {
+        if (!File.Exists(BridgeFile)) return null;
+        var info = ReadInfo(BridgeFile);
+        return info != null && Alive(info.Value.pid) ? info : null;
+    }
+
+    /// <summary>Other running Civil 3D instances with the bridge loaded (stale files of closed ones are removed).</summary>
+    public static List<object> OtherInstances()
+    {
+        var list = new List<object>();
+        try
+        {
+            var target = TargetInstance();
+            foreach (var f in Directory.GetFiles(BridgeInfo.DataFolder, "bridge-*.json"))
+            {
+                var info = ReadInfo(f);
+                if (info == null || !Alive(info.Value.pid)) { try { File.Delete(f); } catch { } continue; }
+                if (info.Value.pid == Environment.ProcessId) continue;
+                list.Add(new { pid = info.Value.pid, session_id = info.Value.session, isTarget = target?.pid == info.Value.pid });
+            }
+        }
+        catch { /* best effort */ }
+        return list;
     }
 
     private static bool BridgeFileIsMine()
@@ -79,14 +140,26 @@ internal static class BridgeServer
         try { _cts?.Cancel(); } catch { /* shutting down */ }
         try { _listener?.Stop(); } catch { /* shutting down */ }
         _listener = null;
-        try { if (File.Exists(BridgeFile) && BridgeFileIsMine()) File.Delete(BridgeFile); } catch { /* best effort */ }
+        try { File.Delete(InstanceFile(Environment.ProcessId)); } catch { /* best effort */ }
+        try
+        {
+            if (File.Exists(BridgeFile) && BridgeFileIsMine())
+            {
+                File.Delete(BridgeFile);
+                // hand the target to another running instance, if there is one
+                foreach (var f in Directory.GetFiles(BridgeInfo.DataFolder, "bridge-*.json"))
+                    if (ReadInfo(f) is { } info && Alive(info.pid)) { File.Copy(f, BridgeFile, true); break; }
+            }
+        }
+        catch { /* best effort */ }
     }
 
     public static string Describe() => _listener == null
         ? "Civil 3D MCP bridge: not running."
         : $"Civil 3D MCP bridge v{BridgeInfo.Version} listening on 127.0.0.1:{Port} (" +
           $"UI context: {(MainThread.HasUiContext ? "yes" : "NO")}; editing: {(WriteGate.Granted ? "allowed for the active drawing" : "not allowed yet")}). " +
-          $"Connection details: {BridgeFile}";
+          (IsTarget ? $"This instance is the MCP target. Connection details: {BridgeFile}"
+                    : $"Another Civil 3D instance (pid {TargetInstance()?.pid}) is the MCP target; run MCPSTATUS here to make this one the target.");
 
     private static async Task AcceptLoop(CancellationToken ct)
     {

@@ -32,8 +32,9 @@ from uuid import UUID, uuid5
 from bridge_client import EDIT_TIMEOUT, BridgeError, call, drawing_target, edit_request_id
 
 MAX_BATCH_OPERATIONS = 500
-END_CLEARANCE = 2.0
-STAND_IN_OD = 1.15        # outside diameter / DN allowance for a stand-in pipe (ductile iron DN150 is 170 mm)          # m; a valve or tap is kept this far from a pipe end or another valve/tap
+# Build assumptions. Each one is a parameter of the import (see DEFAULTS); these are only the defaults.
+END_CLEARANCE = 2.0          # m; a valve or tap is kept this far from a pipe end or another valve/tap
+STAND_IN_OD = 1.15           # outside diameter / DN allowance for a stand-in pipe (ductile iron DN150 is 170 mm)
 ELBOW_MIN_DEFLECTION = 5.0   # degrees; below this two pipes simply meet
 ELBOW_ANGLE_TOLERANCE = 6.0  # degrees; a bend further than this from a catalogue elbow gets no elbow (reported)
 PLASTIC = ("pvc", "upvc", "pe", "hdpe", "mdpe", "ppr")
@@ -48,6 +49,9 @@ DEFAULTS: dict[str, Any] = {
     "pipe_label_style": "WaterGEMS Pipe", "valve_label_style": "WaterGEMS Valve", "label_height_mm": 1.8,
     "alignment_layer": "WATER-ALIGNMENT", "alignment_label_set": "_No Labels", "profile_view_style": "Profile View",
     "band_set": "auto",       # profile view band set; auto = Standard, else an Elevations band set
+    # build assumptions (geometry rules of the import, not design limits)
+    "part_end_clearance": END_CLEARANCE, "stand_in_od_factor": STAND_IN_OD,
+    "elbow_min_deflection": ELBOW_MIN_DEFLECTION, "elbow_tolerance": ELBOW_ANGLE_TOLERANCE,
 }
 
 # --------------------------------------------------------------------------- reading the export
@@ -326,7 +330,7 @@ def _plan(params: dict[str, Any], o: dict[str, Any], target: Any) -> dict[str, A
     biggest: dict[str, float] = defaultdict(float)
     for p in pipes:
         for end in (p["start"], p["stop"]):
-            biggest[end] = max(biggest[end], max(p["nominal"], p["dn"] * STAND_IN_OD) / 1000.0)
+            biggest[end] = max(biggest[end], max(p["nominal"], p["dn"] * o["stand_in_od_factor"]) / 1000.0)
     for k, n in nodes.items():
         n["z"] = n["ground"] - o["cover"] - biggest[k] / 2
 
@@ -338,12 +342,12 @@ def _plan(params: dict[str, Any], o: dict[str, Any], target: Any) -> dict[str, A
 
     def add_cut(p: dict[str, Any], t: float, cut: dict[str, Any]) -> None:
         length = math.dist(_xy(nodes[p["start"]]), _xy(nodes[p["stop"]]))
-        if length < 2 * END_CLEARANCE + 0.5:
+        if length < 2 * o["part_end_clearance"] + 0.5:
             report["notPlaced"].append(f"{cut['what']}: pipe {p['label']} is too short to take it")
             return
-        lo, hi = END_CLEARANCE / length, 1 - END_CLEARANCE / length
+        lo, hi = o["part_end_clearance"] / length, 1 - o["part_end_clearance"] / length
         t = min(max(t, lo), hi)
-        if any(abs(t - c["t"]) * length < END_CLEARANCE for c in cuts[p["label"]]):
+        if any(abs(t - c["t"]) * length < o["part_end_clearance"] for c in cuts[p["label"]]):
             report["notPlaced"].append(f"{cut['what']}: too close to another valve/tap on {p['label']}")
             return
         cuts[p["label"]].append({**cut, "t": t})
@@ -469,14 +473,14 @@ def _network_ops(plan: dict[str, Any], o: dict[str, Any]) -> tuple[list[dict[str
         elif len(here) == 2:
             (p1, f1), (p2, f2) = here
             deflection = abs((_bearing(f1, _xy(n)) - _bearing(_xy(n), f2) + 180) % 360 - 180)
-            if deflection < ELBOW_MIN_DEFLECTION:
+            if deflection < o["elbow_min_deflection"]:
                 continue
             if p1["dn"] != p2["dn"]:
                 report["fittingsSkipped"].append(f"{label}: DN{p1['dn']} meets DN{p2['dn']} at {deflection:.0f}° (no reducer in the parts list)")
                 continue
             options = parts.elbows(p1["dn"])
             best = min(options, key=lambda a: abs(a - deflection)) if options else None
-            if best is None or abs(best - deflection) > ELBOW_ANGLE_TOLERANCE:
+            if best is None or abs(best - deflection) > o["elbow_tolerance"]:
                 report["fittingsSkipped"].append(f"{label}: {deflection:.0f}° bend has no elbow in the parts list")
                 continue
             fittings.append({"id": label, "name": label, "part": parts.elbow(p1["dn"], best), "at": at,
@@ -594,7 +598,8 @@ def compare(plan: dict[str, Any], target: Any, layers: list[str]) -> dict[str, A
 
 def _options(params: dict[str, Any]) -> dict[str, Any]:
     o = {**DEFAULTS, **{k: v for k, v in params.items() if v is not None}}
-    for key in ("cover", "main_min_mm", "min_line_length", "valve_tolerance", "tap_tolerance", "profile_view_gap"):
+    for key in ("cover", "main_min_mm", "min_line_length", "valve_tolerance", "tap_tolerance", "profile_view_gap",
+                "part_end_clearance", "stand_in_od_factor", "elbow_min_deflection", "elbow_tolerance"):
         value = o[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             raise ValueError(f"'{key}' must be a non-negative number.")
@@ -619,6 +624,8 @@ def _summary(plan: dict[str, Any], o: dict[str, Any]) -> dict[str, Any]:
         "hydrantsInCad": len(plan["hydrants"]),
         "notPlaced": rep["notPlaced"], "fittingsSkipped": rep["fittingsSkipped"],
         "cover": o["cover"], "notes": plan["notes"],
+        "assumptions": {k: o[k] for k in ("cover", "main_min_mm", "min_line_length", "valve_tolerance", "tap_tolerance",
+                                          "part_end_clearance", "stand_in_od_factor", "elbow_min_deflection", "elbow_tolerance")},
     }
 
 
@@ -684,7 +691,8 @@ def _cover_check(target: Any, network: str, wanted: float, plan: dict[str, Any],
     low = sorted((c, n) for n, c in worst.items() if c < wanted - 0.005)
     return {"wanted": wanted, "min": round(min(worst.values()), 3), "pipesChecked": len(worst),
             "belowWantedCount": len(low), "belowWanted": [f"{n}: {c:.3f} m" for c, n in low[:50]],
-            "basis": "built part outside diameter and elevations vs WaterGEMS ground, at both ends of every piece",
+            "basis": "as built against the requested 'cover' (a check of the import, not of any code): built part outside "
+                     "diameter and elevations vs WaterGEMS ground, at both ends of every piece",
             **({"truncated": True} if reply.get("truncated") else {})}
 
 

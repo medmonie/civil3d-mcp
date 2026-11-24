@@ -12,6 +12,9 @@ internal static class DrawingRead
         product = Safe(() => CoreApp.GetSystemVariable("PRODUCT")?.ToString()),
         activeDrawing = AcApp.DocumentManager.MdiActiveDocument?.Name,
         editingAllowed = WriteGate.Granted,
+        pid = Environment.ProcessId,
+        isTarget = BridgeServer.IsTarget,
+        otherInstances = BridgeServer.OtherInstances(),
     };
 
     public static object GetDrawingInfo(JsonElement p)

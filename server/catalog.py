@@ -26,7 +26,7 @@ STYLE_KINDS = ("alignment | alignment_label_set | point_label | profile | profil
 
 READ_GROUPS: dict[str, Group] = {
     "Drawing (AutoCAD)": {
-        "ping": ("Connection check: bridge version, Civil 3D version, active drawing, whether editing is allowed.", {}),
+        "ping": ("Connection check: bridge version, Civil 3D version, active drawing, whether editing is allowed, the process id and any other running Civil 3D instances with the bridge (otherInstances; only one is the MCP target).", {}),
         "get_drawing_info": ("Active drawing: path, units, object counts, the drawing target, and a fresh edit request UUID.", {}),
         "list_layers": ("Layers with on/frozen/locked/plot state, colour and xref flag.", {"limit?": "default 500"}),
         "count_entities": ("Count entities of model space (or a layout) by DXF type or by layer.",
@@ -61,6 +61,15 @@ READ_GROUPS: dict[str, Group] = {
         "list_feature_lines": ("Feature lines: length, min/max elevation, points.", {"limit?": "default 200"}),
         "list_parcels": ("Parcels of every site: name, number, centroid, extents. Read only.", {"limit?": "default 500"}),
         "list_point_groups": ("Point groups: description, point count, query, style overrides.", {}),
+        "sample_surface": ("Surface elevations in one call: at a list of points, or along a polyline / line (the surface's own "
+                           "breakpoints, or every 'interval').",
+                           {"surface": "", "points?": "[[x,y], ...] up to 20000", "handle?": "polyline, line or arc to sample along",
+                            "line?": "[[x1,y1],[x2,y2]] to sample along", "interval?": "m along the line; default: surface breakpoints"}),
+        "list_user_properties": ("User-defined property classifications of COGO points or parcels, with each property's type and default.",
+                                 {"kind?": "point (default) | parcel"}),
+        "get_user_property_values": ("Values of user-defined properties of COGO points or parcels.",
+                                     {"kind?": "point (default) | parcel", "classification?": "default: all", "numbers?": "point numbers",
+                                      "names?": "parcel names", "limit?": "default 500"}),
         "list_point_file_formats": ("Point file formats available for points_import (name, extension, delimiter).", {}),
         "list_description_keys": ("Description key sets with their keys: code, format, point style, label style, layer.", {}),
         "get_surface_analysis": ("A surface's min/max/mean elevation and its analysis ranges: elevations, slopes and slope "
@@ -81,9 +90,18 @@ READ_GROUPS: dict[str, Group] = {
         "get_superelevation": ("Superelevation of an alignment: curves and critical stations with the slope of each lane and "
                                "shoulder (percent).", {"alignment": ""}),
         "list_intersections": ("Corridor intersections: name, location, corridor, number of roads.", {}),
+        "get_sections": ("Ground sections at the sample lines of an alignment: each TIN surface sampled along each sample line (every "
+                         "surface breakpoint) as [offset, elevation], offsets from the alignment (negative = left). Needs no sampled "
+                         "sources or section views. Corridor sections: get_corridor_section.",
+                         {"alignment": "", "group?": "sample line group, default: all", "from_station?": "", "to_station?": "",
+                          "surfaces?": "TIN surfaces, default: the group's surface sources", "limit?": "sample lines, default 50",
+                          "max_points?": "per section, default 500 (thinned beyond)"}),
     },
     "Corridors": {
         "list_corridors": ("Corridors: baselines with their regions and assemblies, corridor surfaces, out-of-date flag.", {}),
+        "get_corridor_section": ("A corridor's section at a station (nearest frequency station): points with codes, offset and elevation "
+                                 "to the baseline; links with codes; shapes with codes and area.",
+                                 {"corridor": "", "station": "", "baseline?": "name or alignment, default: the first", "codes?": "codes to keep"}),
         "list_assemblies": ("Assemblies with their subassemblies (for corridor_create).", {}),
     },
     "Gravity networks": {
@@ -93,14 +111,24 @@ READ_GROUPS: dict[str, Group] = {
         "list_gravity_parts": ("Without parts_list: the gravity parts lists. With it: its pipe and structure families and sizes "
                                "(use these to fill 'family' + 'inner_diameter' / 'size_index' in pipe_network_add).",
                                {"parts_list?": "name or handle"}),
-        "network_hgl": ("Hydraulic and energy grade lines of a gravity network's pipes and structures, flagging HGL above a rim "
-                        "(flooding, or within 'freeboard' of it) or above a pipe crown (surcharge).",
-                        {"network": "", "freeboard?": "m below the rim, default 0"}),
-        "network_interference": ("Clearance check between the pipes of two networks (gravity or pressure), or within one network: "
-                                 "every pair closer than 'clearance' outside to outside, with the gap, the location and which "
-                                 "pipe is above. Negative gap = clash. Only straight circular pipes are checked. Inspect complete and excludedPipes for omitted geometry.",
-                                 {"network1": "", "network2?": "default: network1 against itself", "clearance?": "m, default 0.3",
-                                  "limit?": "default 500"}),
+        "network_hgl": ("Hydraulic and energy grade lines and flow of a gravity network's pipes and structures, next to each pipe's "
+                        "crown at both ends (by flow direction) and each structure's rim, with the differences "
+                        "(hglAboveCrownUp/Down, hglBelowRim). Facts only; judge them against your design criteria.",
+                        {"network": ""}),
+"get_part_data": ("Every catalogue field of the parts of a gravity or pressure network (wall thickness, material, inner / "
+                          "outer sizes, custom fields), with units.",
+                          {"network": "gravity or pressure network", "kind?": "all (default) | pipes | structures | fittings | appurtenances",
+                           "parts?": "part names", "fields?": "field names to keep", "limit?": "default 200"}),
+        "pipe_ground_profile": ("Ground along every pipe of a network: at both ends and every 'interval', the surface elevation, the "
+                                "pipe invert, centre and outside top, and the cover to the outside top; min / max cover per pipe.",
+                                {"network": "gravity or pressure network", "surface": "TIN surface", "interval?": "m, default 5",
+                                 "pipes?": "pipe names", "limit?": "pipes, default 200"}),
+                "network_interference": ("Distances between the pipes of two networks (gravity or pressure), or within one network: every "
+                                 "pair closer than 'within' outside to outside, with the gap (negative = overlap), the location, "
+                                 "which pipe is above and the vertical separation. Only straight circular pipes are measured; "
+                                 "see complete and excludedPipes. Compare the gaps with the clearance your criteria require.",
+                                 {"network1": "", "network2?": "default: network1 against itself",
+                                  "within?": "search distance in m, default 1.0 (a filter, not a limit)", "limit?": "default 500"}),
     },
     "Pressure networks": {
         "list_pressure_networks": ("Pressure networks: parts list, reference surface/alignment, part and pipe-run counts, elevations.", {}),
@@ -147,6 +175,10 @@ WATERGEMS_INPUT = {
     "hydrant_layer?": "CAD layer of hydrant blocks (reported; kept as blocks)", "cad_pipe_layers?": "CAD layers of the drawn pipes -> difference report",
     "main_min_mm?": "pipes of at least this drawn size get profile views, default 160", "line_prefix?": "default 'WL'",
     "min_line_length?": "m, default 50", "valve_tolerance?": "m, default 3", "tap_tolerance?": "m, default 1.5",
+    "part_end_clearance?": "m kept between a valve or tap and a pipe end or another valve/tap, default 2",
+    "stand_in_od_factor?": "outside diameter / DN assumed for a stand-in part when setting cover, default 1.15",
+    "elbow_min_deflection?": "degrees below which two pipes meet without a bend, default 5",
+    "elbow_tolerance?": "degrees a deflection may differ from a catalogue bend, default 6",
 }
 
 PP_SHEETS_INPUT = {
@@ -423,7 +455,10 @@ EDIT_GROUPS: dict[str, Group] = {
                                     "pipe_names?": "filter gravity pipes by name", "structure_names?": "filter gravity structures by name"}),
         "sample_lines_create": ("Create sample lines on an alignment (the group is created if missing).",
                                 {"alignment": "", "group": "", "stations?": "[station, ...]", "interval?": "every N along the alignment",
-                                 "prefix?": "default 'SL-'"}),
+                                 "prefix?": "default 'SL-'", "left_width?": "m, default 20", "right_width?": "m, default 20"}),
+        "sample_sources_set": ("Choose which sources (surfaces, corridors, corridor surfaces, networks) a sample line group samples, so "
+                               "sections exist for get_sections and section views.",
+                               {"alignment": "", "group": "", "sources?": "source names, default: all", "sampled?": "default true"}),
         "section_views_create": ("Create a section view for every sample line of a group, laid out in a grid. All section sources of the "
                                  "group (surfaces, corridors, networks) are sampled first.",
                                  {"alignment": "", "group": "sample line group", "at": "[x,y] lower-left of the first view",

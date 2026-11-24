@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.16.0
+
+The MCP is kept to facts and actions; design judgement (codes, project criteria, quantities) belongs to the AI client. This release removes the built-in limits and adds the raw data design checks need. 63 read actions, 101 edit operations.
+
+**Clean-up (facts only)**
+- `network_hgl` no longer flags flooding or surcharge and has no `freeboard`. It returns each pipe's crown at both ends (by flow) and each structure's rim next to the HGL, with the differences `hglAboveCrownUp/Down` and `hglBelowRim`.
+- `network_interference`: `clearance` (a design limit, default 0.3 m) becomes `within`, a search distance (default 1.0 m; `clearance` still accepted). The reply lists `pairs` with their gap and `overlap`, and counts `overlaps`; no conflicts or clashes are judged.
+- WaterGEMS import: the build assumptions that were constants are now parameters and are reported under `assumptions`: `part_end_clearance` (2 m), `stand_in_od_factor` (1.15), `elbow_min_deflection` (5°), `elbow_tolerance` (6°). The cover check is described as a check of the requested `cover`, not of any code.
+
+**New data reads**
+- `get_part_data`: every catalogue field of the parts of a gravity or pressure network (wall thickness, material, sizes, custom fields) with units; filter by kind, part and field.
+- `list_user_properties`, `get_user_property_values`: user-defined property classifications and values of COGO points and parcels.
+- `get_sections`: ground sections at the sample lines of an alignment, by station range: each TIN surface sampled along each sample line as [offset, elevation] (read from the surface itself; Civil 3D's section objects returned no points through the API in testing). `sample_sources_set` (new edit operation) chooses which sources a sample line group samples, so sections exist. `sample_lines_create` now draws each line across the alignment (`left_width` / `right_width`, default 20 m); a line made from a station alone had no width and sampled nothing.
+- `get_corridor_section`: a corridor's points, links and shapes (codes, offset, absolute elevation, height above the profile, areas) at the nearest frequency station.
+- `sample_surface`: elevations at up to 20,000 points, or along a polyline / line (surface breakpoints or a fixed interval).
+- `pipe_ground_profile`: ground, invert, centre, outside top and cover along every pipe of a network at a set interval, with min / max cover per pipe.
+- `tests\run_data.bat`: live test of these reads in a new drawing.
+
+**Robustness**
+- **One target with several Civil 3D windows.** Each instance announces itself in `bridge-<pid>.json`; a Civil 3D started while another is running no longer takes over the MCP connection silently. `MCPSTATUS` switches on purpose, and when the target closes another running instance takes over. `ping` reports `pid`, `isTarget` and `otherInstances`.
+- `points_import` refuses a file whose point numbers the drawing already has (re-importing them could crash Civil 3D).
+- `get_sections` no longer calls `SampleLineGroup.GetSectionSources` (needs write access and crashed Civil 3D inside a read); default surfaces come from the sample lines' existing sections.
+- Live test fixture for `network_interference` uses a circular pipe family.
+
 ## 0.15.1
 
 Fixes from a ChatGPT review of 0.15.0:

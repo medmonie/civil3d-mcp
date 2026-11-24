@@ -1,6 +1,6 @@
 # Roadmap
 
-This file has two parts: what the Civil 3D MCP does today (v0.15.0), and what could be added next, with an effort estimate and a priority for each item.
+This file has two parts: what the Civil 3D MCP does today (v0.16.0), and what could be added next, with an effort estimate and a priority for each item.
 
 **Effort** (one developer, including the live test in Civil 3D):
 
@@ -21,9 +21,9 @@ This file has two parts: what the Civil 3D MCP does today (v0.15.0), and what co
 
 ---
 
-## 1. What it does today (v0.15.0)
+## 1. What it does today (v0.16.0)
 
-56 read actions and 100 edit operations, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. A dry run executes and rolls back. Each edit names the drawing it is for and carries a request ID, so it cannot land in the wrong drawing or run twice. Editing needs permission per drawing (`MCPALLOW` or the dialog). Works with Claude, ChatGPT desktop and Codex; ChatGPT in a browser connects read-only. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
+63 read actions and 101 edit operations, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. A dry run executes and rolls back. Each edit names the drawing it is for and carries a request ID, so it cannot land in the wrong drawing or run twice. Editing needs permission per drawing (`MCPALLOW` or the dialog). Works with Claude, ChatGPT desktop and Codex; ChatGPT in a browser connects read-only. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
 
 | Area | Read | Create / edit |
 |---|---|---|
@@ -54,13 +54,13 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 
 | # | Feature | Effort | Why / notes |
 |---|---|---|---|
-| 1 | **Bill of quantities export** (.xlsx) | M | Pipe length by diameter and material, manholes by depth band, fittings and valves by type, from any gravity or pressure network. The most-asked deliverable after the drawing itself. |
-| 2 | **Trench and excavation quantities** | M | Excavation, bedding, backfill and surplus volumes per pipe from invert, ground surface, trench width and side slope. Reported by depth band (0–2, 2–4, 4–6 m…) for the BOQ. |
-| 3 | **Sewer design checks report** | M | Minimum/maximum slope, minimum cover, maximum depth, velocity limits from the SewerGEMS results, pipe size never decreasing downstream, drop manholes. Rules set by parameters, e.g. the Egyptian code values. |
+| 1 | ~~Bill of quantities export~~ | → skill | Design work, not MCP: done by the client (a separate skill) from `list_pipes`, `get_part_data`, `pipe_ground_profile`. |
+| 2 | ~~Trench and excavation quantities~~ | → skill | Same: computed by the client from `pipe_ground_profile` / `get_sections` and the project's trench detail. |
+| 3 | ~~Sewer design checks report~~ | → skill | Same: the client compares MCP facts with the code or project criteria. The data it needs was added in 0.16. |
 | 4 | ~~WaterGEMS import~~ | done | Done in 0.11.0. Next: exact PVC parts once the parts list has them, hydrant branches, reducers and crosses. |
 | 5 | ~~**Civil 3D 2024 / 2025 support**~~ ✅ 0.12 | M–L | Done: one DLL per release (2024, 2025, 2027). 2026 still to build and test (.NET 8, same as 2025). |
 | 6 | **Band table refresh** | S | Redraw the LISP-style band table for one line after the network or ground changes, without re-importing. |
-| 7 | **Crossing and clearance check** | M | Find where gravity and pressure pipes cross, report the vertical clearance at each crossing and flag those below a set minimum. |
+| 7 | ~~Crossing and clearance check~~ ✅ 0.15 | M | `network_interference` gives the distance between pipes of two networks (gravity or pressure); the minimum is the client's criterion. |
 | 8 | **SewerGEMS model vs drawing check** | M | After an import, compare the drawing's network (names, inverts, sizes, lengths) with the export and list differences, so later edits in Civil 3D can be checked against the model. |
 
 ### P1 — sheets and AutoCAD (done in 0.13, pending live test of each)
@@ -81,7 +81,7 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 
 | # | Feature | Effort | Why / notes |
 |---|---|---|---|
-| 36 | **Plan and profile sheets** | L | Frames along an alignment, one layout per frame with a rotated plan viewport and the matching profile view, match lines. Replaces #9 with an MCP-native version (Civil 3D's Plan Production is only partly in the API). |
+| 36 | ~~Plan and profile sheets~~ ✅ 0.14 | L | Frames along an alignment, one layout per frame with a rotated plan viewport and the matching profile view, match lines. Replaces #9 with an MCP-native version (Civil 3D's Plan Production is only partly in the API). |
 | 37 | **Sheet index table** | S | Sheet number, title and revision across layouts, drawn as a table. |
 | 38 | **Fields and data tables** | M | Fields in text (sheet number, file name, date) and tables built from object data (pipe schedules, coordinate tables). |
 | 39 | **Geolocation / coordinate system** | S | Read and set the drawing's coordinate system. |
@@ -97,7 +97,18 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 | 42 | ✅ 0.15 **Point files, point groups, description keys** | M | P2 | `points_import` (any point file format of the drawing, into a point group), `point_group_create` (queries with wildcards and ranges), `description_key_create`; reads `list_point_groups`, `list_point_file_formats`, `list_description_keys`. |
 | 43 | ✅ 0.15 **Surface analysis** | M | P2 | `surface_analysis_set` (elevation, slope and slope-arrow ranges with colours, shown through a surface style), `surface_waterdrop`, `get_surface_analysis` (ranges, watersheds). Cut / fill: `surface_volume_create`. |
 | 44 | ✅ 0.15 **Alignment from polyline, intersections, superelevation** | M–L | P2 | `alignment_from_polyline`, `alignment_offset_create`, `get_superelevation`, `superelevation_slope_set`, `list_intersections`. Creating intersections and calculating superelevation are commands only (not in .NET). |
-| 45 | ✅ 0.15 **Interference check and hydraulic grade line** | M | P2 | `network_interference` (clearance / clash between pipes of two networks, gravity or pressure, or within one), `hgl_set`, `network_hgl` (flooding and surcharge flags). Structures are not part of the clearance check yet. |
+| 45 | ✅ 0.15 **Interference check and hydraulic grade line** | M | P2 | `network_interference` (distances between pipes of two networks, gravity or pressure, or within one), `hgl_set`, `network_hgl` (HGL next to crown and rim; facts only since 0.16). Structures are not part of the clearance check yet. |
+
+### MCP data access (0.16)
+
+| # | Feature | Done |
+|---|---|---|
+| 48 | ✅ 0.16 **Facts-only reads** | `network_hgl`, `network_interference` and the WaterGEMS import no longer carry design limits. |
+| 49 | ✅ 0.16 **Part data and user properties** | `get_part_data`, `list_user_properties`, `get_user_property_values`. |
+| 50 | ✅ 0.16 **Section data** | `get_sections`, `get_corridor_section`. |
+| 51 | ✅ 0.16 **Surface sampling** | `sample_surface`, `pipe_ground_profile`. |
+| 52 | **Selection and view control** | Highlight, select or zoom to objects so the client can show what it found. |
+| 53 | **Corridor feature lines and codes along a station range** | Beyond a single station. |
 
 ### P2 — useful
 
@@ -131,9 +142,11 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 
 ## Suggested order
 
-1. **Quantities:** #1 BOQ, #2 trench quantities, #3 design checks. All three reuse the network data the MCP already reads, so they pay back fastest.
-2. **Water side:** #4 WaterGEMS import, #7 crossings.
+The MCP gives facts and actions; design checks, quantities and code compliance are done by the AI client (as skills
+kept outside this repository) with the project's criteria.
+
+1. **Data access still missing:** #52 selection and view control, #53 corridor data along a station range, #11 LandXML, #13 data shortcuts.
+2. **Round-trips:** #8 model vs drawing differences (facts), #6 band table refresh, #15 profile view labels for parts.
 3. **Reach:** #5 Civil 3D 2026 (2024 / 2025 done in 0.12).
-4. Small items (#6, #8, #15, #18) can be added in between.
 
 Effort figures are estimates. Anything marked XL depends on what Autodesk adds to the API.

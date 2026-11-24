@@ -109,6 +109,19 @@ internal static class CivilOps
         CivilDb.PointFileFormat format;
         try { format = formats[formatName]; }
         catch { throw new ArgumentException($"points_import: point file format '{formatName}' not found. Use list_point_file_formats."); }
+        // Importing numbers the drawing already has can bring Civil 3D down, so refuse before calling the importer.
+        if (formatName.TrimStart().StartsWith("P", StringComparison.OrdinalIgnoreCase))
+        {
+            var clash = new List<uint>();
+            foreach (var line in File.ReadLines(path))
+            {
+                var first = line.Split(new[] { ',', ' ', '\t', ';' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+                if (first != null && uint.TryParse(first, out uint n) && c.Civ.CogoPoints.Contains(n)) clash.Add(n);
+            }
+            if (clash.Count > 0)
+                throw new ArgumentException($"points_import: the drawing already has point number(s) {string.Join(", ", clash.Take(20))}{(clash.Count > 20 ? ", ..." : "")} " +
+                    $"({clash.Count} in the file). Renumber the file or erase those points first.");
+        }
         uint before = c.Civ.CogoPoints.Count;
         uint imported;
         if (StrParam(p, "point_group") is { Length: > 0 } group)

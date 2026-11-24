@@ -12,6 +12,7 @@ internal static class AlignmentOps
         ops["profile_view_add_parts"] = ProfileViewAddParts;
         ops["sample_lines_create"] = SampleLinesCreate;
         ops["section_views_create"] = SectionViewsCreate;
+        ops["sample_sources_set"] = SampleSourcesSet;
     }
 
     private const double StationTolerance = 1e-6;
@@ -241,10 +242,50 @@ internal static class AlignmentOps
         var existing = TryFindSampleLineGroup(c.Tr, al, group);
         var groupId = existing?.ObjectId ?? CivilDb.SampleLineGroup.Create(group, al.ObjectId);
         string prefix = StrParam(p, "prefix") ?? "SL-";
+        // Sample lines are drawn across the alignment, left_width to the left and right_width to the right; a line made
+        // from a station alone has no width and samples nothing.
+        double left = PositiveParam(p, "left_width") ?? 20.0, right = PositiveParam(p, "right_width") ?? 20.0;
         foreach (var s in stations.Distinct().OrderBy(x => x))
-            CivilDb.SampleLine.Create($"{prefix}{s:0.###}", groupId, s);
+        {
+            double le = 0, ln = 0, re = 0, rn = 0;
+            al.PointLocation(s, -left, ref le, ref ln);
+            al.PointLocation(s, right, ref re, ref rn);
+            var pts = new Point2dCollection { new Point2d(le, ln), new Point2d(re, rn) };
+            var id = CivilDb.SampleLine.Create($"{prefix}{s:0.###}", groupId, pts);
+            var sl = (CivilDb.SampleLine)c.Tr.GetObject(id, OpenMode.ForWrite);
+            if (Math.Abs(sl.Station - s) > StationTolerance) c.Warn($"sample_lines_create: '{sl.Name}' landed at station {R3(sl.Station)} instead of {s}.");
+        }
         var g = (CivilDb.SampleLineGroup)c.Tr.GetObject(groupId, OpenMode.ForRead);
-        return new { alignment = al.Name, group, groupCreated = existing == null, sampleLinesNow = g.GetSampleLineIds().Count };
+        return new { alignment = al.Name, group, groupCreated = existing == null, leftWidth = left, rightWidth = right,
+                     sampleLinesNow = g.GetSampleLineIds().Count };
+    }
+
+    /// <summary>Choose which sources (surfaces, corridors, networks) a sample line group samples, so sections exist.</summary>
+    private static object SampleSourcesSet(EditContext c, JsonElement p)
+    {
+        var al = FindAlignment(c.Civ, c.Tr, NeedStr(p, "alignment"));
+        string group = NeedStr(p, "group");
+        var g = TryFindSampleLineGroup(c.Tr, al, group, OpenMode.ForWrite)
+                ?? throw new ArgumentException($"Sample line group '{group}' not found on alignment '{al.Name}'. Use list_sample_lines.");
+        var names = ArrParam(p, "sources", 200).Select(e => e.GetString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase);
+        bool sampled = BoolParam(p, "sampled") ?? true;
+        var changed = new List<string>();
+        var available = new List<object>();
+        var sourceNames = new List<string>();
+        foreach (CivilDb.SectionSource source in g.GetSectionSources())
+        {
+            sourceNames.Add(source.SourceName);
+            if (names.Count > 0 && !names.Contains(source.SourceName)) continue;
+            try
+            {
+                if (source.IsSampled != sampled) { source.IsSampled = sampled; changed.Add(source.SourceName); }
+            }
+            catch (Exception ex) { c.Warn($"sample_sources_set: '{source.SourceName}': {ex.Message}"); }
+            available.Add(new { name = source.SourceName, type = source.SourceType.ToString(), sampled = Safe(() => source.IsSampled) });
+        }
+        var missing = names.Where(n => !sourceNames.Any(a => SameName(a, n))).ToList();
+        if (missing.Count > 0) c.Warn($"sample_sources_set: not a source of '{group}': {string.Join(", ", missing)}.");
+        return new { alignment = al.Name, group = g.Name, sampled, changed, sources = available };
     }
 
     private static object SectionViewsCreate(EditContext c, JsonElement p)

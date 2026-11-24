@@ -156,7 +156,7 @@ internal static class AlignmentRead
         return new { count = rows.Count, profileViews = rows };
     });
 
-    private static IEnumerable<CivilDb.SampleLine> SampleLines(Transaction tr, CivilDb.SampleLineGroup g) =>
+    internal static IEnumerable<CivilDb.SampleLine> SampleLines(Transaction tr, CivilDb.SampleLineGroup g) =>
         g.GetSampleLineIds().Cast<ObjectId>().Select(id => (CivilDb.SampleLine)tr.GetObject(id, OpenMode.ForRead));
 
     public static object ListSampleLines(JsonElement p)

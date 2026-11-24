@@ -63,6 +63,13 @@ internal static class Registry
         Read("list_pipe_runs", PressureRead.ListPipeRuns);
         Read("list_pressure_part_sizes", PressureRead.ListPressurePartSizes);
         // styles and meta
+        Read("get_part_data", DataRead.GetPartData);
+        Read("list_user_properties", DataRead.ListUserProperties);
+        Read("get_user_property_values", DataRead.GetUserPropertyValues);
+        Read("get_sections", DataRead.GetSections);
+        Read("get_corridor_section", DataRead.GetCorridorSection);
+        Read("sample_surface", DataRead.SampleSurface);
+        Read("pipe_ground_profile", DataRead.PipeGroundProfile);
         Read("list_point_groups", CivilRead.ListPointGroups);
         Read("list_point_file_formats", CivilRead.ListPointFileFormats);
         Read("list_description_keys", CivilRead.ListDescriptionKeys);

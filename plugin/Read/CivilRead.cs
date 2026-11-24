@@ -2,7 +2,7 @@ namespace C3dMcpBridge;
 
 /// <summary>
 /// Civil 3D reads of 0.15: point groups, point file formats and description keys, surface analysis ranges,
-/// superelevation, intersections, hydraulic grade lines and a pipe interference / clearance check.
+/// superelevation, intersections, hydraulic grade lines and pipe-to-pipe distances (clearance facts).
 /// </summary>
 internal static class CivilRead
 {
@@ -108,12 +108,13 @@ internal static class CivilRead
 
     // ---------------------------------------------------------------- hydraulics
 
-    /// <summary>HGL / EGL of every pipe and structure, with flags: HGL above the rim (flooding) or above a pipe's crown (surcharge).</summary>
+    /// <summary>
+    /// HGL / EGL of every pipe and structure next to the levels they are compared with (pipe crown at each end by flow,
+    /// structure rim) and the differences. Facts only: whether a margin is acceptable is for the design criteria to say.
+    /// </summary>
     public static object NetworkHgl(JsonElement p) => WithRead((db, tr) =>
     {
         var net = FindPipeNetwork(Civ, tr, NeedStr(p, "network"));
-        double freeboard = DblParam(p, "freeboard") ?? 0.0;
-        var flags = new List<object>();
         var pipes = net.GetPipeIds().Cast<ObjectId>().Select(id => (CivilDb.Pipe)tr.GetObject(id, OpenMode.ForRead)).Select(x =>
         {
             double halfHeight = GravityRead.InnerHalfHeight(x);
@@ -121,19 +122,22 @@ internal static class CivilRead
             double crownUp = (reversed ? x.EndPoint.Z : x.StartPoint.Z) + halfHeight;
             double crownDown = (reversed ? x.StartPoint.Z : x.EndPoint.Z) + halfHeight;
             double hu = x.HydraulicGradeLineUp, hd = x.HydraulicGradeLineDown;
-            if (hu > crownUp + 1e-6 || hd > crownDown + 1e-6)
-                flags.Add(new { part = x.Name, issue = "surcharged", hglUp = R3(hu), hglDown = R3(hd), crownUp = R3(crownUp), crownDown = R3(crownDown) });
-            return new { name = x.Name, hglUp = R3(hu), hglDown = R3(hd), eglUp = R3(x.EnergyGradeLineUp), eglDown = R3(x.EnergyGradeLineDown), flow = R3(x.FlowRate) };
+            return new
+            {
+                name = x.Name, flow = R3(x.FlowRate), flowDirection = x.FlowDirection.ToString(),
+                hglUp = R3(hu), hglDown = R3(hd), eglUp = R3(x.EnergyGradeLineUp), eglDown = R3(x.EnergyGradeLineDown),
+                crownUp = R3(crownUp), crownDown = R3(crownDown),
+                hglAboveCrownUp = R3(hu - crownUp), hglAboveCrownDown = R3(hd - crownDown),
+            };
         }).ToList();
-        var structures = net.GetStructureIds().Cast<ObjectId>().Select(id => (CivilDb.Structure)tr.GetObject(id, OpenMode.ForRead)).Select(s =>
+        var structures = net.GetStructureIds().Cast<ObjectId>().Select(id => (CivilDb.Structure)tr.GetObject(id, OpenMode.ForRead)).Select(s => new
         {
-            if (s.HydraulicGradeLine > s.RimElevation - freeboard + 1e-6)
-                flags.Add(new { part = s.Name, issue = freeboard > 0 ? "less than the freeboard below the rim" : "above the rim (flooding)",
-                                hgl = R3(s.HydraulicGradeLine), rim = R3(s.RimElevation) });
-            return new { name = s.Name, hgl = R3(s.HydraulicGradeLine), egl = R3(s.EnergyGradeLine), rim = R3(s.RimElevation) };
+            name = s.Name, hgl = R3(s.HydraulicGradeLine), egl = R3(s.EnergyGradeLine), rim = R3(s.RimElevation),
+            hglBelowRim = R3(s.RimElevation - s.HydraulicGradeLine),
         }).ToList();
-        return new { network = net.Name, pipes, structures, flags,
-                     note = "Values are what the pipes and structures hold: set them with hgl_set (e.g. from SewerGEMS) or Civil 3D's analysis." };
+        return new { network = net.Name, pipes, structures,
+                     note = "Values are what the pipes and structures hold (set with hgl_set, e.g. from SewerGEMS, or by Civil 3D's analysis). " +
+                            "hglAboveCrown > 0 means the pipe runs full at that end; hglBelowRim < 0 means the HGL is above the rim." };
     });
 
     private sealed record Seg(string Network, string Name, string Kind, Point3d A, Point3d B, double Radius, ObjectId StartNode, ObjectId EndNode);
@@ -163,7 +167,7 @@ internal static class CivilRead
             var pipe = (CivilDb.Pipe)tr.GetObject(id, OpenMode.ForRead);
             if (pipe.SubEntityType != CivilDb.PipeSubEntityType.Straight || pipe.CrossSectionalShape != CivilDb.SweptShapeType.Circular)
             {
-                excluded.Add(new { network = net.Name, pipe = pipe.Name, handle = H(id), reason = "Clearance requires a straight circular pipe" });
+                excluded.Add(new { network = net.Name, pipe = pipe.Name, handle = H(id), reason = $"Clearance requires a straight circular pipe (this one is {pipe.SubEntityType}, {pipe.CrossSectionalShape})" });
                 continue;
             }
             yield return new Seg(net.Name, pipe.Name, "pipe", pipe.StartPoint, pipe.EndPoint, pipe.OuterDiameterOrWidth / 2, pipe.StartStructureId, pipe.EndStructureId);
@@ -197,8 +201,9 @@ internal static class CivilRead
     }
 
     /// <summary>
-    /// Pipes of two networks (gravity or pressure) that come closer than 'clearance' outside to outside, with the
-    /// gap, where it happens and which pipe is above. Civil 3D's interference check object cannot be created through
+    /// Pipe pairs of two networks (gravity or pressure) closer than 'within' outside to outside, with the gap (negative =
+    /// overlap), where it happens, which pipe is above and the vertical separation. Facts only: the required clearance
+    /// comes from the design criteria. Civil 3D's interference check object cannot be created through
     /// .NET; this check works on the pipe geometry directly. With one network, its own pipes are checked against
     /// each other, except pipes that share a structure.
     /// </summary>
@@ -206,7 +211,8 @@ internal static class CivilRead
     {
         string n1 = NeedStr(p, "network1");
         string? n2 = StrParam(p, "network2");
-        double clearance = DblParam(p, "clearance") ?? 0.3;
+        // a search distance, not a design limit: every pair closer than this is reported with its gap
+        double clearance = DblParam(p, "within") ?? DblParam(p, "clearance") ?? 1.0;
         int limit = IntParam(p, "limit", 500, 1, 5000);
         var first = ResolveNetwork(tr, n1);
         var second = n2 == null ? first : ResolveNetwork(tr, n2);
@@ -236,7 +242,7 @@ internal static class CivilRead
                 hits.Add((gap, new
                 {
                     a = new { network = x.Network, pipe = x.Name, kind = x.Kind }, b = new { network = y.Network, pipe = y.Name, kind = y.Kind },
-                    gap = R3(gap), clash = gap < 0, at = P3(new Point3d((pa.X + pb.X) / 2, (pa.Y + pb.Y) / 2, (pa.Z + pb.Z) / 2)),
+                    gap = R3(gap), overlap = gap < 0, at = P3(new Point3d((pa.X + pb.X) / 2, (pa.Y + pb.Y) / 2, (pa.Z + pb.Z) / 2)),
                     above = pa.Z >= pb.Z ? x.Name : y.Name, verticalSeparation = R3(Math.Abs(pa.Z - pb.Z)),
                 }));
             }
@@ -244,10 +250,10 @@ internal static class CivilRead
         var rows = hits.OrderBy(h => h.gap).Take(limit).Select(h => h.row).ToList();
         return new
         {
-            network1 = n1, network2 = n2 ?? n1, clearance, pipesA = a.Count + excludedA,
+            network1 = n1, network2 = n2 ?? n1, within = clearance, pipesA = a.Count + excludedA,
             pipesB = b.Count + (sameNetwork ? excludedA : excluded.Count - excludedA), pairsTested = tested,
             complete = excluded.Count == 0, excludedPipes = excluded,
-            found = hits.Count, clashes = hits.Count(h => h.gap < 0), truncated = hits.Count > limit, conflicts = rows,
+            found = hits.Count, overlaps = hits.Count(h => h.gap < 0), truncated = hits.Count > limit, pairs = rows,
             note = "Gap is the minimum centreline distance minus both outer radii. Counts cover eligible straight circular pipes only. See excludedPipes for omitted geometry. Structures are outside the scope.",
         };
     });

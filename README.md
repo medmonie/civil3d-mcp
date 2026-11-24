@@ -1,6 +1,6 @@
 # Civil 3D MCP bridge
 
-**Version 0.15 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
+**Version 0.16 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
 
 Lets Claude, ChatGPT and other MCP clients read the open Civil 3D drawing and edit it after you grant permission in Civil 3D.
 It covers:
@@ -164,7 +164,7 @@ Commands in the Civil 3D command line:
 
 | Command | Effect |
 |---|---|
-| `MCPSTATUS` | Shows version, port and whether editing is allowed. It selects this Civil 3D instance for MCP calls. |
+| `MCPSTATUS` | Shows version, port and whether editing is allowed. It selects this Civil 3D instance for MCP calls. A second Civil 3D opened while one is running does not take over by itself: it stays idle until you run `MCPSTATUS` in it, and `ping` lists every running instance. When the target closes, another running instance takes over. |
 | `MCPALLOW` | Allows editing of the active drawing without the dialog. |
 | `MCPREVOKE` | Revokes edit permission for all open drawings in this Civil 3D instance. |
 
@@ -238,8 +238,13 @@ sheet: `layout_from_template` (your office template's layout with its title bloc
 
 ## 4. Features
 
-One tool, `civil3d(action, params)`: 56 read actions, 9 QA / help / import / sheet actions, and 100 edit operations inside the
+One tool, `civil3d(action, params)`: 63 read actions, 9 QA / help / import / sheet actions, and 101 edit operations inside the
 single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTIONS.md)** and by `action="help"`.
+
+**Facts and actions, not design rules.** The MCP reads and changes the drawing; it does not judge a design. Reads return
+values and differences (cover, HGL above crown, gap between pipes) without pass / fail limits, and imports state the
+build assumptions they use as parameters. Checking against a code, a client specification or quantities rules is done
+by the AI client with your criteria, on top of this data.
 
 ### Read (never changes the drawing)
 
@@ -247,10 +252,10 @@ single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTI
 |---|---|
 | Drawing (AutoCAD) | Drawing info, layers, entity counts by type or layer, your selection, objects by handle, entities with geometry (lines, polylines, circles, arcs, text, blocks with attributes, hatches, dimensions), blocks, layouts |
 | Sheets and set-up | Viewports (scale, model area, twist, frozen layers), named views, xrefs with status, text / dimension / multileader / table styles, linetypes, layer states, annotation scales, page setups, a block's attributes and dynamic properties |
-| Terrain | Surfaces and their elevations, elevation at a point, cut / fill of a volume surface, surface analysis ranges and watersheds, COGO points, point groups, point file formats, description keys, feature lines, parcels |
-| Alignments | Alignments, station / offset to point and back, profiles, profile elevation at a station, profile views, sample lines, section views, superelevation (curves, critical stations, lane and shoulder slopes), corridor intersections |
-| Corridors | Corridors with baselines, regions and corridor surfaces; assemblies with their subassemblies |
-| Gravity networks | Networks, pipes (size, slope, length, connections), structures (rim, sump), parts lists with families and sizes, hydraulic grade lines with flooding / surcharge flags, a clearance / clash check between networks (gravity and pressure) |
+| Terrain | Surfaces and their elevations, elevation at a point, elevations at many points or along a line in one call, cut / fill of a volume surface, surface analysis ranges and watersheds, COGO points, point groups, point file formats, description keys, user-defined properties of points and parcels, feature lines, parcels |
+| Alignments | Alignments, station / offset to point and back, profiles, profile elevation at a station, profile views, sample lines, section views, section data ([offset, elevation] per source at each sample line), superelevation (curves, critical stations, lane and shoulder slopes), corridor intersections |
+| Corridors | Corridors with baselines, regions and corridor surfaces; a corridor section at a station (points, links and shapes with codes); assemblies with their subassemblies |
+| Gravity networks | Networks, pipes (size, slope, length, connections), structures (rim, sump), parts lists with families and sizes, every catalogue field of a part (`get_part_data`), ground and cover along every pipe, hydraulic grade lines next to crown and rim levels, distances between the pipes of two networks (gravity and pressure) |
 | Pressure networks | Networks, pipes (diameters, lengths, cover), fittings, appurtenances, pipe runs, parts lists and sizes |
 | Styles and meta | Style names of each kind (including band and label styles), what a style contains (`get_style`), edit-permission state, API introspection |
 | QA | Layer names against a naming pattern; objects still carrying Civil 3D's default names |
@@ -456,7 +461,7 @@ Also good to know:
 | Symptom | Cause and fix |
 |---|---|
 | "Civil 3D is not reachable" | Civil 3D is not running, or the plugin did not load. Type `MCPSTATUS` in Civil 3D. If the command is unknown, the plugin is not loaded: check that `%APPDATA%\Autodesk\ApplicationPlugins\C3dMcpBridge.bundle` exists and restart Civil 3D; answer the load question with *Always Load*. |
-| "Could not reach Civil 3D on port ..." | That Civil 3D was closed, or two are open. Type `MCPSTATUS` in the one you want. |
+| "Could not reach Civil 3D on port ..." | That Civil 3D was closed. Type `MCPSTATUS` in the one you want. `ping` → `otherInstances` shows when more than one Civil 3D is open. |
 | "Unknown action" / "Unknown edit operation" | Check the server's startup mode and version. Restart the MCP client after updating. |
 | `help` shows `missingInPlugin` | Civil 3D is still running the old plugin. Restart Civil 3D. |
 | "Civil 3D did not become available within 30 s" | A command or dialog is open in Civil 3D. Finish or cancel it (Esc) and ask again. |

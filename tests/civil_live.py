@@ -3,7 +3,7 @@
 Run it in a NEW drawing from the Civil 3D metric template (Drawing1, after MCPALLOW); nothing is saved. It builds its
 own data: a point file -> points_import, point groups and a description key, a TIN surface with elevation / slope
 analysis and waterdrops, an alignment from a polyline and an offset alignment, two gravity networks that cross, their
-pipe and structure tables, HGL values with the flood / surcharge flags, and the interference check.
+pipe and structure tables, HGL values with crown / rim differences, and pipe-to-pipe distances.
 Output: tests\\results\\civil.txt
 """
 import json
@@ -81,6 +81,8 @@ if fmt:
     ])
     check("points imported", result(out, 1).get("imported") == len(pts), str(result(out, 1)))
     check("manhole group has 3 points", result(out, 2).get("points") == 3, str(result(out, 2)))
+    edit("importing the same point numbers again is refused",
+         [{"op": "points_import", "path": str(pfile), "format": fmt}], expect=False)
 groups = read("list_point_groups").get("pointGroups", [])
 check("point groups listed", any(g["name"] == f"Manholes {tag}" for g in groups))
 keys = read("list_description_keys").get("keySets", [])
@@ -125,7 +127,9 @@ pf = [f for f in parts.get("pipeFamilies", []) if f.get("sizes")]
 sf = [f for f in parts.get("structureFamilies", []) if f.get("sizes") and f.get("partType") == "StructJunction"]
 a_net, b_net = f"San {tag}", f"Storm {tag}"
 if pf and sf:
-    P, S = pf[0]["family"], sf[0]["family"]
+    # the crossing fixture needs circular pipes (network_interference measures only those)
+    round_pf = [f for f in pf if not any(w in f["family"].lower() for w in ("box", "rect", "ellip", "egg", "arch"))] or pf
+    P, S = round_pf[0]["family"], sf[0]["family"]
     out = edit("two crossing networks", [
         {"op": "pipe_network_create", "name": a_net, "parts_list": key},
         {"op": "pipe_network_add", "network": a_net,
@@ -149,20 +153,22 @@ if pf and sf:
     check("pipe table rows", result(out).get("rows") == 1, str(result(out)))
     check("structure table rows", result(out, 1).get("rows") == 2, str(result(out, 1)))
     hgl = read("network_hgl", network=a_net)
-    issues = {f["part"]: f["issue"] for f in hgl.get("flags", [])}
-    check("A1 flagged as flooding", "A1" in issues and "rim" in issues["A1"], str(issues))
-    check("PA1 flagged as surcharged", issues.get("PA1") == "surcharged", str(issues))
-    check("A2 not flagged", "A2" not in issues, str(issues))
-    ic = read("network_interference", network1=a_net, network2=b_net, clearance=0.5)
-    found = ic.get("conflicts", [])
+    hp = {x["name"]: x for x in hgl.get("pipes", [])}
+    hs = {x["name"]: x for x in hgl.get("structures", [])}
+    check("no pass/fail flags in network_hgl", "flags" not in hgl, str(list(hgl.keys())))
+    check("A1 HGL above rim reported as a negative margin", hs.get("A1", {}).get("hglBelowRim", 0) < 0, str(hs.get("A1")))
+    check("PA1 HGL above crown reported", (hp.get("PA1", {}).get("hglAboveCrownUp") or -1) > 0, str(hp.get("PA1")))
+    check("A2 HGL below rim", hs.get("A2", {}).get("hglBelowRim", -1) > 0, str(hs.get("A2")))
+    ic = read("network_interference", network1=a_net, network2=b_net, within=0.5)
+    found = ic.get("pairs", [])
     check("crossing found", ic.get("found") == 1 and found and found[0]["a"]["pipe"] == "PA1", str(found)[:300])
     if found:
-        check("gap below clearance", found[0]["gap"] < 0.5, str(found[0]))
+        check("gap within the search distance", found[0]["gap"] < 0.5, str(found[0]))
     if found:
         gap = found[0]["gap"]
         check("pipe above is the storm pipe", found[0]["above"] == "PB1", str(found[0]))
-        ic0 = read("network_interference", network1=a_net, network2=b_net, clearance=0.0)
-        check("clearance 0 reports only clashes", ic0.get("found") == (1 if gap < 0 else 0), f"gap {gap}: {ic0.get('found')}")
+        ic0 = read("network_interference", network1=a_net, network2=b_net, within=0.0)
+        check("within 0 reports only overlaps", ic0.get("found") == (1 if gap < 0 else 0), f"gap {gap}: {ic0.get('found')}")
     # Two pipes cross in one network. Each has a different start structure and an open end.
     open_net = f"Open ends {tag}"
     edit("two crossing pipes with open ends", [
@@ -177,7 +183,7 @@ if pf and sf:
     ])
     for other in ({}, {"network2": open_net.swapcase()}):
         report = read("network_interference", network1=open_net, **other)
-        conflicts = report.get("conflicts", [])
+        conflicts = report.get("pairs", [])
         check(f"open ends produce one distinct crossing {other}",
               report.get("complete") is True and report.get("excludedPipes") == []
               and report.get("found") == 1 and len(conflicts) == 1
