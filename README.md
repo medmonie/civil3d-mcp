@@ -1,6 +1,6 @@
 # Civil 3D MCP bridge
 
-**Version 0.17 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
+**Version 0.18 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
 
 Lets Claude, ChatGPT and other MCP clients read the open Civil 3D drawing and edit it after you grant permission in Civil 3D.
 It covers:
@@ -238,7 +238,7 @@ sheet: `layout_from_template` (your office template's layout with its title bloc
 
 ## 4. Features
 
-One tool, `civil3d(action, params)`: 67 read actions, 9 QA / help / import / sheet actions, and 110 edit operations inside the
+One tool, `civil3d(action, params)`: 67 read actions, 9 QA / help / import / sheet actions, and 120 edit operations inside the
 single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTIONS.md)** and by `action="help"`.
 
 **Facts and actions, not design rules.** The MCP reads and changes the drawing; it does not judge a design. Reads return

@@ -21,7 +21,7 @@ This file has two parts: what the Civil 3D MCP does today (v0.16.0), and what co
 
 ---
 
-## 1. What it does today (v0.17.0)
+## 1. What it does today (v0.18.0)
 
 63 read actions and 101 edit operations, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. A dry run executes and rolls back. Each edit names the drawing it is for and carries a request ID, so it cannot land in the wrong drawing or run twice. Editing needs permission per drawing (`MCPALLOW` or the dialog). Works with Claude, ChatGPT desktop and Codex; ChatGPT in a browser connects read-only. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
 
@@ -118,7 +118,12 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 | 60 | ✅ 0.17 **Several profile views** | `profile_views_create`. |
 | 61 | ✅ 0.17 **User-defined property definitions** | `udp_create`. |
 | 62 | ✅ 0.17 **Point export** | `points_export`. |
-| 63 | **Next from the API review** | Corridor feature-line export (as alignment / profile / polyline / COGO points), corridor regions and targets, surface definition from contours / DEM / point groups, catchments, surface extraction, solids for BIM, section volume tables. |
+| 63 | ✅ 0.18 **Derived profiles** | `profile_derive` (corridor feature line, offset at a slope, static copy). |
+| 64 | ✅ 0.18 **Corridor detail** | `corridor_baseline_add`, `corridor_region_edit`, `corridor_surface_set`. Slope patterns not yet. |
+| 65 | ✅ 0.18 **Surface extraction** | `surface_extract`. |
+| 66 | ✅ 0.18 **Network extras** | `pipe_curved_add`, `part_swap`, `parts_to_section_views`, `pressure_run_edit`. |
+| 67 | ✅ 0.18 **Section volume tables** | `section_volume_tables`. |
+| 68 | **Next from the API review** | Corridor feature-line export (alignment / polyline / COGO points), corridor targets and slope patterns, surface definition from contours / DEM / point groups, catchments, solids for BIM. |
 
 ### P2 — useful
 

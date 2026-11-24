@@ -75,7 +75,7 @@ edit("surfaces", [{"op": "surface_create", "name": eg, "points": grid}, {"op": "
 edit("alignment, profile with a K curve, sample lines", [
     {"op": "alignment_create", "name": al, "points": [[ox, oy], [ox + 200, oy]]},
     {"op": "profile_create", "alignment": al, "name": f"{al} FG", "pvis": [[0, 10], {"station": 100, "elevation": 14, "k": 10}, [200, 10]]},
-    {"op": "sample_lines_create", "alignment": al, "group": f"SLG {tag}", "interval": 50, "left_width": 20, "right_width": 20},
+    {"op": "sample_lines_create", "alignment": al, "group": f"SLG {tag}", "interval": 50, "left_width": 20, "right_width": 20, "prefix": f"SL{tag}-"},
 ])
 pg = read("get_profile_geometry", alignment=al, profile=f"{al} FG")
 crest = [e for e in pg.get("entities", []) if e.get("curve")]

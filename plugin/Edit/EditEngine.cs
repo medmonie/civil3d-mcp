@@ -29,6 +29,7 @@ internal static class EditEngine
         StyleOps.Register(Ops);
         CivilOps.Register(Ops);
         GeometryOps.Register(Ops);
+        ExtraOps.Register(Ops);
     }
 
     public static List<string> OperationNames => Ops.Keys.OrderBy(k => k).ToList();

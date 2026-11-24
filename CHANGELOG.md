@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.18.0
+
+Second batch from the Civil 3D API review. 67 read actions, 120 edit operations. Live test: `tests\run_extras.bat` (Civil 3D 2027).
+
+**Profiles**
+- `profile_derive`: a profile from a corridor feature line (by code), an offset alignment's profile at a cross slope, or a static layout copy of a corridor or offset profile (Civil 3D refuses static copies of surface and layout profiles).
+
+**Corridors**
+- `corridor_baseline_add`: another baseline with its first region.
+- `corridor_region_edit`: add, merge, split at a station, move start / end, extra stations, assembly frequency.
+- `corridor_surface_set`: corridor surface boundaries (extents, feature-line code or points; outside / inside), masks, breakline codes.
+
+**Surfaces**
+- `surface_extract`: contours at an interval or at given levels, major / minor contours, border, watersheds, grid lines, optionally onto a layer.
+
+**Networks**
+- `pipe_curved_add`: curved gravity pipe by radius or through a point, connected to named structures.
+- `part_swap`: swap gravity pipes / structures to another family and size.
+- `parts_to_section_views`: show network parts in every section view of a sample line group.
+- `pressure_run_edit`: bends at plan PIs, vertical bends at station / elevation, merge another run into a run.
+
+**Sections**
+- `section_volume_tables`: total-volume or material tables on every section view of a group (Civil 3D fills them once it has computed the material sections).
+
+**Tests**
+- `geometry_live.py` and `extras_live.py` name sample lines and pipe runs with the run's tag, so the live tests can share one drawing.
+
 ## 0.17.0
 
 Road geometry, earthwork quantities and plan-production additions from the Civil 3D API review. 67 read actions, 110 edit operations. Live test: `tests\run_geometry.bat` (ALL PASS on Civil 3D 2027).
