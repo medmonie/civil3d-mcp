@@ -680,6 +680,10 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
                   "dry_run": dry_run, "sewergems_finish": finish_plan}
     _check_batch(core_batch, "network and profiles")
     core = call("edit", core_batch, timeout=EDIT_TIMEOUT)
+    if core.get("state") == "pending":
+        # The bridge returns the ledger entry, not a result, while the same request_id is still running.
+        return {"built": False, "pending": True, "target": target, "request_id": request_id,
+                "note": "This import is still running in Civil 3D. Call again later with the same request_id."}
     if not core.get("applied"):
         return {"built": False, "dryRun": dry_run, "target": target, "core": core,
                 "note": "Dry run covers the network, profile objects, and styles." if dry_run else None}
@@ -704,6 +708,12 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
             else:
                 finish = {**finish, "applied": True, "state": "already_positioned"}
 
+        if finish.get("state") == "pending":
+            # The first call with this request_id is still laying out the profiles (seen through get_edit_status, or
+            # as the ledger entry the bridge returns for a running request): say so, so the caller asks again later.
+            return {"built": False, "pending": True, "network": net, "coreApplied": True, "target": target,
+                    "request_id": request_id, "finish": finish,
+                    "note": "This import is still running in Civil 3D (profile layout). Call again later with the same request_id."}
         by_name = {_name(rename, label): node for label, node in nodes.items()}
         levels = call("list_structures", {"network_name": net, "limit": 5000, "target": target})["structures"]
         for st in levels:

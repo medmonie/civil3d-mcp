@@ -51,7 +51,7 @@ internal static class ModelOps
             }
             throw new ArgumentException($"{op}: code '{actual}' has no feature line on the {side} of '{bl.Name}'.");
         }
-        int index = IntParam(p, "index", 0, 0, 10000);
+        int index = IndexParam(p, "index", 0, 10000);
         if (index >= col.Count) throw new ArgumentException($"{op}: code '{actual}' has {col.Count} feature line(s) on '{bl.Name}'; index {index} is out of range.");
         return col[index];
     }
@@ -363,9 +363,9 @@ internal static class ModelOps
         double value = mode == "depth" ? NeedPositive(p, "depth") : mode == "elevation" ? NeedDbl(p, "elevation") : 0;
         ObjectId bottom = mode == "surface" ? FindSurface(c.Civ, c.Tr, NeedStr(p, "bottom_surface")).ObjectId : ObjectId.Null;
 
-        if (StrParam(p, "file") is { Length: > 0 } file)
+        if (StrParam(p, "file") is { Length: > 0 })
         {
-            string path = Path.GetFullPath(file);
+            string path = NeedFullPath(p, "file", op);
             if (!path.EndsWith(".dwg", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException($"{op}: file must be a .dwg path.");
             if (File.Exists(path) && BoolParam(p, "overwrite") != true) throw new ArgumentException($"{op}: {path} exists; pass overwrite: true.");
             if (Path.GetDirectoryName(path) is not string dir || !Directory.Exists(dir)) throw new ArgumentException($"{op}: folder not found for {path}.");
@@ -373,19 +373,33 @@ internal static class ModelOps
             var db = c.Db;
             c.AfterCommit.Add(() =>
             {
-                if (File.Exists(path)) File.Delete(path);
-                using var tr = db.TransactionManager.StartTransaction();
-                var t = (CivilDb.TinSurface)tr.GetObject(tinId, OpenMode.ForWrite);
-                string f = path;
-                _ = mode switch
+                // Written to a temporary file next to the target first: an existing file is replaced only when the
+                // solids were made, so a failed creation never deletes the old file.
+                string temp = Path.Combine(dir, $"{Path.GetFileNameWithoutExtension(path)}.mcp-{Guid.NewGuid():N}.dwg");
+                try
                 {
-                    "depth" => t.CreateSolidsAtDepthToFile(value, layer, pen, ref f),
-                    "elevation" => t.CreateSolidsAtFixedElevationToFile(value, layer, pen, ref f),
-                    _ => t.CreateSolidsAtSurfaceToFile(bottom, layer, pen, ref f),
-                };
-                tr.Commit();
+                    string f = temp;
+                    using (var tr = db.TransactionManager.StartTransaction())
+                    {
+                        var t = (CivilDb.TinSurface)tr.GetObject(tinId, OpenMode.ForWrite);
+                        _ = mode switch
+                        {
+                            "depth" => t.CreateSolidsAtDepthToFile(value, layer, pen, ref f),
+                            "elevation" => t.CreateSolidsAtFixedElevationToFile(value, layer, pen, ref f),
+                            _ => t.CreateSolidsAtSurfaceToFile(bottom, layer, pen, ref f),
+                        };
+                        tr.Commit();
+                    }
+                    if (!File.Exists(f)) throw new InvalidOperationException($"{op}: Civil 3D reported no error but wrote no file.");
+                    if (File.Exists(path)) File.Delete(path);
+                    File.Move(f, path);
+                }
+                finally
+                {
+                    if (File.Exists(temp)) File.Delete(temp);
+                }
             });
-            return new { surface = tin.Name, mode, file = path, note = "Written after the edit commits." };
+            return new { surface = tin.Name, mode, file = path, note = "Written after the edit commits; an existing file is replaced only when the solids are made." };
         }
         var ids = mode switch
         {
@@ -424,7 +438,7 @@ internal static class ModelOps
 
     private static string ExistingFile(JsonElement p, string op, params string[] extensions)
     {
-        string path = Path.GetFullPath(NeedStr(p, "path"));
+        string path = NeedFullPath(p, "path", op);
         if (!File.Exists(path)) throw new ArgumentException($"{op}: file not found: {path}");
         if (extensions.Length > 0 && !extensions.Any(e => path.EndsWith(e, StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException($"{op}: expected a {string.Join(" / ", extensions)} file: {path}");

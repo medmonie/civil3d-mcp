@@ -26,7 +26,9 @@ STYLE_KINDS = ("alignment | alignment_label_set | point_label | profile | profil
 
 READ_GROUPS: dict[str, Group] = {
     "Drawing (AutoCAD)": {
-        "ping": ("Connection check: bridge version, Civil 3D version, active drawing, whether editing is allowed, the process id and any other running Civil 3D instances with the bridge (otherInstances; only one is the MCP target).", {}),
+        "ping": ("Connection check: bridge version, Civil 3D version, active drawing, whether editing is allowed, the process id and any other running Civil 3D instances with the bridge (otherInstances; only one is the MCP target). "
+                 "Answers within a few seconds even when Civil 3D is busy (e.g. the permission dialog is open): then busy: true "
+                 "and the drawing details are left out.", {}),
         "get_drawing_info": ("Active drawing: path, units, object counts, the drawing target, and a fresh edit request UUID.", {}),
         "list_layers": ("Layers with on/frozen/locked/plot state, colour and xref flag.", {"limit?": "default 500"}),
         "count_entities": ("Count entities of model space (or a layout) by DXF type or by layer.",
@@ -177,6 +179,13 @@ READ_GROUPS: dict[str, Group] = {
                       {"kind": "a list_styles kind", "name": ""}),
         "describe_api": ("Developer aid: public members of an Autodesk.* .NET type loaded in Civil 3D.",
                          {"type_name": "full type name", "contains?": "member name filter", "limit?": "default 300"}),
+        "diagnose_save": ("Why the drawing cannot be saved ('object cannot be saved ... no file was created'). Read only. Checks "
+                          "the header's current layer / styles, writes every object through a probe copy filer (objects that fail "
+                          "to write; objects that still point at erased ones), and writes a real copy to %TEMP% that is deleted "
+                          "again (the end-to-end save check).",
+                          {"scan?": "default true", "save_copy?": "default true",
+                           "soft_refs?": "also list soft pointers to erased objects (default false)", "limit?": "rows per list, default 100",
+                           "max_objects?": "default 2000000"}),
         "get_edit_permission": ("Whether editing is currently allowed in the active drawing, and how to allow it.", {}),
         "get_edit_status": ("Find an edit by request UUID. Check this after a timeout before retrying. Status remains available while Civil 3D is busy.",
                             {"target": "original drawing target", "request_id": "original edit UUID"}),
@@ -274,7 +283,8 @@ EDIT_ACTION = (
     "Run a batch of operations on a specific open drawing. First call get_drawing_info and verify the drawing name. "
     "Pass its target and new_edit_request_id as target and request_id. Use the target from the reads used to prepare this edit. "
     "A changed session or active drawing stops the edit. The drawing operations share one transaction. "
-    "dry_run aborts that transaction after validation. File outputs run after commit. Editing requires permission for the "
+    "dry_run aborts that transaction after validation and is not recorded under its request_id, so the same ID can be used "
+    "for the real edit. File outputs run after commit. Editing requires permission for the "
     "target drawing. If the response is interrupted, check get_edit_status with the original target and request_id; "
     "resend only with the same parameters and request ID for a retry. A request whose state is 'error' changed nothing "
     "(for example Civil 3D was busy) and may be resent with the same request ID."
@@ -338,7 +348,7 @@ EDIT_GROUPS: dict[str, Group] = {
         "attribute_set": ("Change attribute values of a block reference.", {"handle": "", "attributes": "{TAG: value, ...}"}),
         "block_import": ("Bring block definitions in from another drawing (.dwg/.dwt/.dxf), or the whole file as one block.",
                          {"path": "full path", "blocks?": "block names to copy; omit to bring the whole file in as one block",
-                          "as_block?": "name for the whole-file block (default: the file name)", "replace?": "redefine blocks the drawing already has (default false)"}),
+                          "as_block?": "name for the whole-file block (default: the file name)", "replace?": "redefine blocks the drawing already has (default false); the drawing's own layers and styles are never changed"}),
         "title_block_insert": ("Put a title block on a layout and fill its attributes; with path it is first brought in from that file.",
                                {"layout": "", "path?": "full path of the title block drawing", "block?": "block name (in that file, or already defined)",
                                 "at?": "[x,y] on paper, default [0,0]", "scale?": "", "rotation_deg?": "", "attributes?": "{TAG: value, ...}",
@@ -670,8 +680,8 @@ EDIT_GROUPS: dict[str, Group] = {
                             {"network": "", "start": "[x,y,z] centreline", "end": "[x,y,z]", "radius?": "", "clockwise?": "default false",
                              "through?": "[x,y] a point on the arc", "family?": "pipe family (list_gravity_parts)", "size_index?": "", "inner_diameter?": "alternative to size_index", "name?": "", "start_structure?": "name", "end_structure?": "name",
                              "parts_list?": "", "apply_rules?": "default false"}),
-        "part_swap": ("Swap gravity pipes or structures to another family / size (all parts of the network, or by names / handles).",
-                      {"network": "", "names?": "[part name]", "handles?": "[handle]", "family?": "pipe family (list_gravity_parts)", "size_index?": "", "inner_diameter?": "alternative to size_index", "parts_list?": ""}),
+        "part_swap": ("Swap the gravity pipes or structures named by 'names' or 'handles' (one of them is required) to another family / size.",
+                      {"network": "", "names?": "[part name]", "handles?": "[handle] (parts of this network)", "family": "pipe or structure family (list_gravity_parts)", "size_index?": "", "inner_diameter?": "alternative to size_index", "parts_list?": ""}),
         "parts_to_section_views": ("Show gravity network parts in every section view of a sample line group.",
                                    {"network": "", "alignment": "", "group": "", "names?": "[part name], default: all", "handles?": ""}),
         "pipe_set": ("Change one gravity pipe.",

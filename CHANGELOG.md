@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.20.0
+
+**Found in the live test**
+- `section_volume_tables` made the drawing unsavable ("object cannot be saved ... no file was created"): Civil 3D leaves
+  every table made by `CreateVolumeTable` open for write once the edit ends. The bridge now releases those tables after
+  every edit (committed, rolled back or dry run) and reports any it cannot release.
+- `diagnose_save` crashed Civil 3D with its file filer; it now always scans with a copy filer (the %TEMP% copy is the
+  real save check).
+- `ping` answers within 2 s while Civil 3D is busy (e.g. the permission dialog is open): `busy: true`.
+- A second edit while one is running (or waiting for the permission dialog) is refused at once, not after 30 s.
+- SewerGEMS / WaterGEMS: a retry with the same request_id during a later phase says `pending: true`.
+- `block_import` with `replace` never changes the drawing's own layers or styles.
+- `assembly_create` attaches each subassembly to the outer edge of the previous one on its side.
+- `network_interference` within one network skips pipes connected to each other (pressure fittings included).
+- `surface_solids_create` with `overwrite` keeps the old file when making the solids fails.
+- `labels_add` / `pressure_labels_add` skip parts already labelled; `network_styles` restyles existing labels.
+
+**MCP server**
+- Tools are async: the blocking bridge call runs in a worker thread, so pings, cancellation and other requests are served
+  during long edits; progress is reported every 10 s while Civil 3D works (permission dialog, imports).
+- Clear error text from failed calls; edits with non-object operations are refused up front.
+
+**Bridge**
+- `bridge.json` is written atomically; the client retries a half-written file.
+- A dry run is not recorded under its request_id (the real edit can reuse it); the request ledger drops its oldest
+  finished entries instead of refusing all edits after 8192; a second edit is refused while one is running (permission
+  dialog, plotting).
+
+**Edit operations**
+- `entity_copy` / `block_define` deep-clone (attributes and polyline vertices kept; copies stay in their own space).
+- Indexes (`index`, `size_index`, feature-line `elevations` / `radii`) must be whole numbers in range; never clamped.
+- `part_swap` needs `names` or `handles`; handles must belong to the network.
+- File paths must be full paths in every file input / output; `inspect_file` accepts repeated attribute tags.
+- At most 200 warnings per batch; `pipe_ground_profile` at most 2000 samples per pipe; `sample_surface` refuses an
+  interval that would exceed 20000 samples; `sample_lines_create` warns at its 5000-line cap; a silently renamed
+  pressure part is reported.
+- WaterGEMS / SewerGEMS imports report a still-running import as pending and survive an expired cached reply.
+
+**New**
+- `diagnose_save` (read): why a drawing cannot be saved (header styles, every object written through a probe DWG
+  filer, a copy written to %TEMP%). `tests\run_save.bat` replays the 0.15-0.19 live suites and runs it after every edit.
+
 ## 0.19.1
 
 **Installer**

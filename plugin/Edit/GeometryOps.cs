@@ -249,8 +249,7 @@ internal static class GeometryOps
         }
         foreach (var e in ArrParam(p, "elevations", 5000))
         {
-            int i = IntParam(e, "index", -1, 0, 100000);
-            fl.SetPointElevation(i, NeedDbl(e, "elevation"));
+            fl.SetPointElevation(NeedIndex(e, "index", 100000), NeedDbl(e, "elevation"));
         }
         if (Has(p, "elevations")) done.Add("elevations set");
         if (DblParam(p, "raise") is double dz)
@@ -260,7 +259,7 @@ internal static class GeometryOps
             done.Add($"raised {dz}");
         }
         foreach (var e in ArrParam(p, "radii", 5000))
-            fl.SetCurveRadius(IntParam(e, "index", -1, 0, 100000), NeedPositive(e, "radius"));
+            fl.SetCurveRadius(NeedIndex(e, "index", 100000), NeedPositive(e, "radius"));
         if (Has(p, "radii")) done.Add("radii set");
 
         return new
@@ -525,7 +524,7 @@ internal static class GeometryOps
     /// <summary>Write COGO points (all, or one point group) to a file in a point file format. Runs after the edit commits.</summary>
     private static object PointsExport(EditContext c, JsonElement p)
     {
-        string path = Path.GetFullPath(NeedStr(p, "path"));
+        string path = NeedFullPath(p, "path", "points_export");
         if (File.Exists(path) && BoolParam(p, "overwrite") != true)
             throw new ArgumentException($"points_export: {path} exists; pass overwrite: true.");
         string? dir = Path.GetDirectoryName(path);

@@ -1,6 +1,6 @@
 # Civil 3D MCP bridge
 
-**Version 0.19 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
+**Version 0.20 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
 
 Lets Claude, ChatGPT and other MCP clients read the open Civil 3D drawing and edit it after you grant permission in Civil 3D.
 It covers:
@@ -238,7 +238,7 @@ sheet: `layout_from_template` (your office template's layout with its title bloc
 
 ## 4. Features
 
-One tool, `civil3d(action, params)`: 70 read actions, 9 QA / help / import / sheet actions, and 130 edit operations inside the
+One tool, `civil3d(action, params)`: 71 read actions, 9 QA / help / import / sheet actions, and 130 edit operations inside the
 single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTIONS.md)** and by `action="help"`.
 
 **Facts and actions, not design rules.** The MCP reads and changes the drawing; it does not judge a design. Reads return
@@ -528,7 +528,12 @@ is predictable: `list_pressure_pipes` is in `Read/PressureRead.cs`, `pressure_ad
 | Build and deploy the plugin | `build.bat` (Civil 3D closed) | `build_result.txt` |
 | Offline test of the server | `tests\run_smoke_test.bat` | `tests\results\smoke_test.txt` |
 | All read actions, live | `tests\run_live_read.bat` | `tests\results\live_read.txt` |
+| Save-failure hunt: replays the 0.15-0.19 suites and runs `diagnose_save` after every edit | `tests\run_save.bat` | `tests\results\save.txt`, `save_check.json` |
 | All edit operations, live | `tests\run_live_edit.bat` | `tests\results\live_edit.txt`, ends with `ALL PASS` |
+| Audit checks (changed edit operations, D records), live | `tests\run_audit.bat` | `tests\results\audit.txt` |
+| Fixes 35-42 (labels, block import, assembly, clashes, solids file), live | `tests\run_fixes.bat` | `tests\results\fixes.txt` |
+| MCP transport through a real client (permission dialog, busy ping, Civil 3D closed) | `tests\run_transport_edit.bat` / `_loop` / `_down` | `tests\results\transport_*.txt` |
+| Import retries (SewerGEMS / WaterGEMS) | `tests\run_imports_sewer.bat` / `_water` | `tests\results\imports_*.txt` |
 | Python environment + offline test | `setup_server.bat` | `setup_result.txt` |
 | Installer and source zips | `build_package.bat` | `dist\C3dMcp.zip`, `dist\C3dMcp-source.zip`, log `package_build.txt` (one `RELEASE 20xx:` line each) |
 

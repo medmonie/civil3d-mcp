@@ -102,7 +102,7 @@ internal static class CivilOps
 
     private static object PointsImport(EditContext c, JsonElement p)
     {
-        string path = NeedStr(p, "path");
+        string path = NeedFullPath(p, "path", "points_import");
         if (!File.Exists(path)) throw new ArgumentException($"points_import: file not found: {path}");
         var formats = CivilDb.PointFileFormatCollection.GetPointFileFormats(c.Db);
         string formatName = NeedStr(p, "format");

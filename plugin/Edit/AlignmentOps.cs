@@ -365,8 +365,12 @@ internal static class AlignmentOps
         string group = NeedStr(p, "group");
         var stations = NumList(p, "stations", maxLines);
         if (PositiveParam(p, "interval") is double step)
+        {
             for (double s = al.StartingStation; s <= al.EndingStation + StationTolerance && stations.Count < maxLines; s += step)
                 stations.Add(Math.Min(s, al.EndingStation));
+            if (stations.Count >= maxLines && stations[^1] < al.EndingStation - StationTolerance)
+                c.Warn($"sample_lines_create: stopped at {maxLines} sample lines (station {R3(stations[^1])}); use a larger interval or several calls.");
+        }
         if (stations.Count == 0) throw new ArgumentException("sample_lines_create: give stations and/or interval.");
         if (stations.Where(s => !OnAlignment(al, s)).Select(s => (double?)s).FirstOrDefault() is double outside)
             throw new ArgumentException($"sample_lines_create: station {outside} is outside the alignment ({StationRange(al)}).");
@@ -399,7 +403,7 @@ internal static class AlignmentOps
         string group = NeedStr(p, "group");
         var g = TryFindSampleLineGroup(c.Tr, al, group, OpenMode.ForWrite)
                 ?? throw new ArgumentException($"Sample line group '{group}' not found on alignment '{al.Name}'. Use list_sample_lines.");
-        var names = ArrParam(p, "sources", 200).Select(e => e.GetString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var names = NameSet(p, "sources", 200);
         bool sampled = BoolParam(p, "sampled") ?? true;
         var changed = new List<string>();
         var available = new List<object>();

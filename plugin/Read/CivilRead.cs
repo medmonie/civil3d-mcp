@@ -140,7 +140,7 @@ internal static class CivilRead
                             "hglAboveCrown > 0 means the pipe runs full at that end; hglBelowRim < 0 means the HGL is above the rim." };
     });
 
-    private sealed record Seg(string Network, string Name, string Kind, Point3d A, Point3d B, double Radius, ObjectId StartNode, ObjectId EndNode);
+    private sealed record Seg(string Network, string Name, string Kind, Point3d A, Point3d B, double Radius, ObjectId StartNode, ObjectId EndNode, ObjectId Id);
 
     private static CivilDb.Entity ResolveNetwork(Transaction tr, string name) =>
         (CivilDb.Entity?)TryFindPressureNetwork(Civ, tr, name) ?? FindPipeNetwork(Civ, tr, name);
@@ -157,7 +157,11 @@ internal static class CivilRead
                     excluded.Add(new { network = pnet.Name, pipe = pp.Name, handle = H(id), reason = "Curved or vertically segmented pressure pipe" });
                     continue;
                 }
-                yield return new Seg(pnet.Name, pp.Name, "pressure pipe", pp.StartPoint, pp.EndPoint, pp.OuterDiameter / 2, ObjectId.Null, ObjectId.Null);
+                // the parts at its ends (a fitting, an appurtenance or another pipe): pipes joined through one are not a clash
+                ObjectId startPart = ObjectId.Null, endPart = ObjectId.Null;
+                try { startPart = pp.StartPartId; endPart = pp.EndPartId; } catch { /* unconnected ends */ }
+                yield return new Seg(pnet.Name, pp.Name, "pressure pipe", pp.StartPoint, pp.EndPoint, pp.OuterDiameter / 2,
+                                     startPart, endPart, id);
             }
             yield break;
         }
@@ -170,7 +174,7 @@ internal static class CivilRead
                 excluded.Add(new { network = net.Name, pipe = pipe.Name, handle = H(id), reason = $"Clearance requires a straight circular pipe (this one is {pipe.SubEntityType}, {pipe.CrossSectionalShape})" });
                 continue;
             }
-            yield return new Seg(net.Name, pipe.Name, "pipe", pipe.StartPoint, pipe.EndPoint, pipe.OuterDiameterOrWidth / 2, pipe.StartStructureId, pipe.EndStructureId);
+            yield return new Seg(net.Name, pipe.Name, "pipe", pipe.StartPoint, pipe.EndPoint, pipe.OuterDiameterOrWidth / 2, pipe.StartStructureId, pipe.EndStructureId, id);
         }
     }
 
@@ -205,7 +209,7 @@ internal static class CivilRead
     /// overlap), where it happens, which pipe is above and the vertical separation. Facts only: the required clearance
     /// comes from the design criteria. Civil 3D's interference check object cannot be created through
     /// .NET; this check works on the pipe geometry directly. With one network, its own pipes are checked against
-    /// each other, except pipes that share a structure.
+    /// each other, except pipes connected to each other (a shared structure or fitting, or joined directly).
     /// </summary>
     public static object NetworkInterference(JsonElement p) => WithRead((db, tr) =>
     {
@@ -223,6 +227,7 @@ internal static class CivilRead
         var b = sameNetwork ? a : Segments(tr, second, excluded).ToList();
         var hits = new List<(double gap, object row)>();
         long tested = 0;
+        int connectedSkipped = 0;
         for (int i = 0; i < a.Count; i++)
         {
             var x = a[i];
@@ -233,8 +238,10 @@ internal static class CivilRead
                 var y = b[j];
                 if (Math.Max(y.A.X, y.B.X) + y.Radius < xMinX || Math.Min(y.A.X, y.B.X) - y.Radius > xMaxX ||
                     Math.Max(y.A.Y, y.B.Y) + y.Radius < xMinY || Math.Min(y.A.Y, y.B.Y) - y.Radius > xMaxY) continue;
-                bool SharesNode(ObjectId node) => !node.IsNull && (node == y.StartNode || node == y.EndNode);
-                if (sameNetwork && (SharesNode(x.StartNode) || SharesNode(x.EndNode))) continue;
+                // connected pipes (a shared structure or fitting, or one pipe joined straight to the other) touch by design
+                bool SharesNode(ObjectId node) => !node.IsNull && (node == y.StartNode || node == y.EndNode || node == y.Id);
+                bool Joined() => SharesNode(x.StartNode) || SharesNode(x.EndNode) || y.StartNode == x.Id || y.EndNode == x.Id;
+                if (sameNetwork && Joined()) { connectedSkipped++; continue; }
                 tested++;
                 var (dist, pa, pb) = Closest(x.A, x.B, y.A, y.B);
                 double gap = dist - x.Radius - y.Radius;
@@ -252,7 +259,7 @@ internal static class CivilRead
         {
             network1 = n1, network2 = n2 ?? n1, within = clearance, pipesA = a.Count + excludedA,
             pipesB = b.Count + (sameNetwork ? excludedA : excluded.Count - excludedA), pairsTested = tested,
-            complete = excluded.Count == 0, excludedPipes = excluded,
+            complete = excluded.Count == 0, excludedPipes = excluded, connectedPairsSkipped = connectedSkipped,
             found = hits.Count, overlaps = hits.Count(h => h.gap < 0), truncated = hits.Count > limit, pairs = rows,
             note = "Gap is the minimum centreline distance minus both outer radii. Counts cover eligible straight circular pipes only. See excludedPipes for omitted geometry. Structures are outside the scope.",
         };

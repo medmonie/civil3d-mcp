@@ -120,7 +120,7 @@ internal static class GravityParts
             Size size;
             if (Has(spec, "size_index"))
             {
-                int i = IntParam(spec, "size_index", -1, -1, int.MaxValue);
+                int i = IndexParam(spec, "size_index", -1, int.MaxValue);
                 size = sizes.FirstOrDefault(s => s.Index == i)
                        ?? throw new ArgumentException($"{what}: size_index {i} is out of range (0..{sizes.Count - 1}).");
             }

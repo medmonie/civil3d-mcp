@@ -148,6 +148,14 @@ internal static class SheetRead
         return null;
     }
 
+    private static Dictionary<string, string> Attributes(Transaction tr, BlockReference br)
+    {
+        var d = new Dictionary<string, string>();
+        foreach (ObjectId id in br.AttributeCollection)
+            if (tr.GetObject(id, OpenMode.ForRead) is AttributeReference a) d[a.Tag] = a.TextString;
+        return d;
+    }
+
     public static object GetBlockProperties(JsonElement p) => WithRead((db, tr) =>
     {
         string handle = NeedStr(p, "handle");
@@ -185,7 +193,7 @@ internal static class SheetRead
     /// </summary>
     public static object InspectFile(JsonElement p)
     {
-        string path = Path.GetFullPath(NeedStr(p, "path"));
+        string path = NeedFullPath(p, "path", "inspect_file");
         int limit = IntParam(p, "limit", 60, 1, 2000);
         using var side = BlockOps.ReadSide(path, "inspect_file");
         using var tr = side.TransactionManager.StartTransaction();
@@ -193,8 +201,8 @@ internal static class SheetRead
         {
             handle = H(e.ObjectId), type = DxfOrName(e.ObjectId), layer = e.Layer,
             block = e is BlockReference br ? Safe(() => ((BlockTableRecord)tr.GetObject(br.IsDynamicBlock ? br.DynamicBlockTableRecord : br.BlockTableRecord, OpenMode.ForRead)).Name) : null,
-            attributes = e is BlockReference b2 ? b2.AttributeCollection.Cast<ObjectId>().Select(id => (AttributeReference)tr.GetObject(id, OpenMode.ForRead))
-                .ToDictionary(a => a.Tag, a => a.TextString) : null,
+            // title blocks often repeat a tag: ToDictionary would throw and fail the whole inspection; the last one wins
+            attributes = e is BlockReference b2 ? Attributes(tr, b2) : null,
             geometry = Safe(() => DrawingRead.Geometry(tr, e)),
         };
 

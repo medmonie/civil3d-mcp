@@ -57,6 +57,23 @@ internal static class J
     public static int IntParam(JsonElement p, string name, int dflt, int min, int max) =>
         TryGet(p, name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) ? Math.Clamp(n, min, max) : dflt;
 
+    /// <summary>
+    /// An optional 0-based index that selects WHICH object an edit touches: absent -> dflt; anything that is not a whole
+    /// number in 0..max is refused. Unlike IntParam it never clamps and never falls back to the default on a bad value,
+    /// because a silently changed index edits the wrong object.
+    /// </summary>
+    public static int IndexParam(JsonElement p, string name, int dflt, int max)
+    {
+        if (!TryGet(p, name, out var v)) return dflt;
+        if (v.ValueKind != JsonValueKind.Number || !v.TryGetDouble(out var d) || d != Math.Floor(d) || d < int.MinValue || d > int.MaxValue)
+            throw new ArgumentException($"'{name}' must be a whole number.");
+        int n = (int)d;
+        return n >= 0 && n <= max ? n : throw new ArgumentException($"'{name}' must be from 0 to {max}; got {n}.");
+    }
+
+    public static int NeedIndex(JsonElement p, string name, int max) =>
+        Has(p, name) ? IndexParam(p, name, 0, max) : throw new ArgumentException($"Missing whole-number parameter '{name}'.");
+
     private static double Number(JsonElement v, string what)
     {
         if (v.ValueKind != JsonValueKind.Number) throw new ArgumentException($"{what} must be a number.");
@@ -105,6 +122,19 @@ internal static class J
     }
 
     public static List<string> StrList(JsonElement p, string name, int max) => NeedArr(p, name, max).Select(Text).ToList();
+
+    /// <summary>An optional list of names as a case-insensitive set (empty when absent). Numbers are taken as written.</summary>
+    public static HashSet<string> NameSet(JsonElement p, string name, int max) =>
+        ArrParam(p, name, max).Select(Text).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A full path given in 'name' (checked BEFORE Path.GetFullPath, which would otherwise resolve a relative
+    /// path against Civil 3D's current folder).</summary>
+    public static string NeedFullPath(JsonElement p, string name, string op)
+    {
+        string path = NeedStr(p, name);
+        if (!Path.IsPathFullyQualified(path)) throw new ArgumentException($"{op}: '{name}' must be a full path such as C:\\Projects\\file.");
+        return Path.GetFullPath(path);
+    }
 
     /// <summary>An optional list of numbers (empty when absent).</summary>
     public static List<double> NumList(JsonElement p, string name, int max) =>

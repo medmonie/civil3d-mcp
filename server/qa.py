@@ -41,13 +41,19 @@ def check_layer_names(pattern: str, skip_xref_layers: bool = True) -> dict[str, 
 def check_default_names() -> dict[str, Any]:
     flagged: dict[str, list[str]] = {}
     totals: dict[str, int] = {}
+    truncated: list[str] = []
     for label, method, key in (
         ("surfaces", "list_surfaces", "surfaces"),
         ("alignments", "list_alignments", "alignments"),
         ("pipeNetworks", "list_pipe_networks", "pipeNetworks"),
         ("pressureNetworks", "list_pressure_networks", "pressureNetworks"),
     ):
-        items = call(method)[key]
-        totals[label] = len(items)
+        data = call(method, {"limit": 5000})
+        items = data[key]
+        # 'total' counts every object even when the list was cut at 'limit'; fall back for actions without paging.
+        totals[label] = data.get("total", len(items))
+        if data.get("truncated"):
+            truncated.append(label)
         flagged[label] = [i["name"] for i in items if DEFAULT_NAME_RX.match(i.get("name") or "")]
-    return {"totals": totals, "defaultNamed": flagged, "totalFlagged": sum(len(v) for v in flagged.values())}
+    return {"totals": totals, "defaultNamed": flagged, "totalFlagged": sum(len(v) for v in flagged.values()),
+            **({"truncated": truncated} if truncated else {})}

@@ -1,0 +1,797 @@
+CIVIL 3D MCP CODE AUDIT FIXES
+=============================
+Date 2026-11-25
+Base release 0.19.1 (changes are unreleased; version not bumped)
+
+Scope
+-----
+This log records every code change made from the code audit of 2026-11-25: the
+MCP server (Python), the bridge, the core helpers, every edit operation file
+(plugin/Edit), every read action file (plugin/Read) and the part pickers
+(plugin/Parts), plus the save-failure diagnostics and tests that came out of
+it. Paths are relative to the project folder.
+
+Each entry names the audit finding it answers and the check in
+docs/AUDIT_TEST_PLAN.md that verifies it in Civil 3D.
+
+Finding key
+  H1-H8   high: H1 blocked event loop, H2 no progress on long calls,
+          H3 re-entrant edits, H4 file-write surface, H5 pipe_set units,
+          H6 part_swap scope, H7 block_import replace, H8 set_current styles
+  M1-M16  medium: M1 request ledger cap, M2 dry run used up its request_id,
+          M3 import reply handling, M4 bridge.json half-written, M5 QA
+          undercount, M6 non-object operations, M7/M11 silent integer
+          coercion, M8 tool description size, M9 cancellation, M10 shallow
+          Clone(), M12 relative paths, M13 duplicate attribute tags,
+          M14 unbounded replies, M15 silent pressure-part rename,
+          M16 non-string items in name lists
+  S1      save failure "object cannot be saved ... no file was created"
+          (seen when quitting Civil 3D after the 0.15-0.19 live suites)
+  C1      cleanup without behaviour change
+
+Verification done before release
+  - Compiled against the Civil 3D DLLs: 2027 (net10) and 2025 (net8) through
+    tools/typecheck, and the real 2024 (net48) build of
+    plugin/C3dMcpBridge.csproj. No new errors or warnings; the 12 obsolete-API
+    warnings on 2027 are the same as before.
+  - tests/smoke_test.py: ALL OK (includes the server against
+    tests/fake_bridge.py, the catalogue/registry match and the docs check).
+  - Server: offline check that tool schemas are unchanged, errors keep their
+    text, a ping is answered during a slow call, and progress is sent.
+  - tests/save_live.py: offline run against a fake bridge that breaks the
+    drawing at the third edit.
+  - Not yet run in Civil 3D: everything in docs/AUDIT_TEST_PLAN.md.
+
+
+MCP SERVER (server/)
+====================
+
+01  server/server.py
+--------------------
+Added
+  - _off_loop(): runs the blocking bridge call in a worker thread
+    (anyio.to_thread.run_sync) and sends a progress notification every 10 s
+    (HEARTBEAT_SECONDS) while it runs, when the client gave a progressToken.
+  - A check that every item of params.operations is an object.
+Removed
+  - Synchronous tool functions.
+Modified
+  - civil3d, civil3d_read, civil3d_edit and civil3d_import are async and take
+    the MCP Context (not part of the input schema; schemas are unchanged).
+  - An exception from the bridge call is re-raised outside the task group, so
+    the client sees the original message instead of "unhandled errors in a
+    TaskGroup".
+Why
+  - H1: mcp 1.30 runs a synchronous tool directly on the event loop, so one
+    edit (up to 630 s) froze the whole stdio session: no ping answers, no
+    cancellation, every other request queued.
+  - H2: the first edit waits on the permission dialog (up to 9 minutes) and
+    imports take minutes; clients that time out requests (60 s in the
+    TypeScript SDK) gave up while the edit could still be applied.
+  - M6: non-object items passed the unknown-operation check and only failed
+    in the plugin.
+Test
+  - A1, A2, A5.
+
+02  server/bridge_client.py
+---------------------------
+Added
+  - Up to 3 attempts, 0.1 s apart, to read bridge.json.
+Removed
+  - None.
+Modified
+  - A missing file still fails at once with "Civil 3D is not reachable".
+Why
+  - M4: the plugin rewrites bridge.json (start-up, MCPSTATUS, hand-over on
+    exit) and the server reads it on every call; a half-written file gave a
+    false "Cannot read the bridge file" error.
+Test
+  - A6.
+
+03  server/qa.py
+----------------
+Added
+  - "truncated" in the reply of check_default_names when a list was cut.
+Removed
+  - None.
+Modified
+  - The list calls pass limit 5000; totals use the plugin's "total" (falling
+    back to the number returned).
+Why
+  - M5: the lists stopped at their default limits (200-500) and the totals
+    reported the rows returned, not the real counts.
+Test
+  - A7.
+
+04  server/sewergems.py
+-----------------------
+Added
+  - A "pending" reply when the core edit with the same request_id is still
+    running.
+Removed
+  - None.
+Modified
+  - None.
+Why
+  - M3: a repeated call while the first was running was reported as
+    "built: false", although the network could still be committed.
+Test
+  - B2.
+
+05  server/watergems.py
+-----------------------
+Added
+  - A "pending" reply when the core edit is still running.
+  - A clear reply when the core edit was committed earlier but its detailed
+    reply has expired from the bridge cache.
+Removed
+  - None.
+Modified
+  - None.
+Why
+  - M3: build() read core["results"] without checking; a retry after the
+    cached reply expired raised KeyError, and a still-running import was
+    reported as "networkCommitted: false".
+Test
+  - B1, B2.
+
+06  server/catalog.py
+---------------------
+Added
+  - diagnose_save (read action, see 25).
+Removed
+  - part_swap's "all parts of the network" default and the optional mark on
+    its "family".
+Modified
+  - The edit description says a dry run is not recorded under its request_id,
+    so the same ID can be used for the real edit.
+  - part_swap: "names" or "handles" is required; handles must be parts of the
+    network; "family" is required.
+Why
+  - M2, H6 (the catalogue said family was optional; the code always required
+    it), S1.
+Test
+  - A4, C4, E6.
+
+
+BRIDGE (plugin/Bridge)
+======================
+
+07  plugin/Bridge/BridgeServer.cs
+---------------------------------
+Added
+  - WriteAtomically(): writes to "<file>.<pid>.tmp", then File.Replace (or
+    File.Move when the file is new).
+Removed
+  - Direct File.WriteAllText and File.Copy onto bridge.json.
+Modified
+  - WriteBridgeFile, WriteInstanceFile and the hand-over to another instance
+    in Stop() use WriteAtomically.
+Why
+  - M4: the server could read a half-written bridge.json.
+Test
+  - A6.
+
+08  plugin/Bridge/EditRequests.cs
+---------------------------------
+Added
+  - Order: insertion order of the request IDs.
+  - EvictOldestFinished(): drops the oldest 10 % of completed or failed
+    entries when the ledger is full; running entries stay.
+  - Flag(): reads a true/false property of a reply and never throws.
+Removed
+  - The hard stop "This bridge session reached its edit request limit.
+    Restart Civil 3D".
+Modified
+  - A dry run (dry_run: true) runs without being recorded.
+  - "applied" and "afterCommitSucceeded" are read with Flag() instead of
+    GetBoolean(), which threw on a missing or non-boolean value.
+Why
+  - M1: after 8192 edits in one session every edit was refused until Civil 3D
+    was restarted.
+  - M2: the fingerprint included dry_run, so the real edit with the dry run's
+    request_id was refused as "a different edit".
+Test
+  - A4 (dry run then real edit); M1 needs no manual test.
+
+
+CORE HELPERS (plugin/Core)
+==========================
+
+09  plugin/Core/J.cs
+--------------------
+Added
+  - IndexParam(p, name, dflt, max): an optional 0-based index. Absent gives
+    the default; anything that is not a whole number from 0 to max is
+    refused (2.0 is accepted as 2).
+  - NeedIndex(p, name, max): the same, required.
+  - NameSet(p, name, max): a list of names as a case-insensitive set;
+    numbers are taken as written.
+  - NeedFullPath(p, name, op): checks that the path is fully qualified BEFORE
+    Path.GetFullPath, then returns the full path.
+Removed
+  - None.
+Modified
+  - None (IntParam is unchanged and still used for limits and counts).
+Why
+  - M7/M11: IntParam returns the default for a wrong type and clamps out of
+    range, so an index such as "2" or 2.5 silently became 0 and the edit hit
+    the wrong object.
+  - M12: callers ran Path.GetFullPath first, which turned a relative path into
+    a path under Civil 3D's current folder and defeated the full-path check.
+  - M16: e.GetString() threw a raw .NET message when a list held a number.
+Test
+  - C6, C7, C8.
+
+10  plugin/Core/Registry.cs
+---------------------------
+Added
+  - Read("diagnose_save", SaveCheck.DiagnoseSave). 71 read actions.
+Removed
+  - None.
+Modified
+  - None.
+Why
+  - S1.
+Test
+  - E6.
+
+
+EDIT ENGINE AND OPERATIONS (plugin/Edit)
+========================================
+
+11  plugin/Edit/EditEngine.cs
+-----------------------------
+Added
+  - _running flag (main thread only) around Run(); the batch body moved to
+    RunExclusive().
+Removed
+  - None.
+Modified
+  - A second edit that arrives while one is running is refused with
+    "Another MCP edit is still running ... send this edit again with the same
+    request_id". Nothing is changed; the request is marked failed in the
+    ledger, so a retry runs.
+Why
+  - H3: the permission dialog (and plotting) runs a nested message loop that
+    can pump the bridge's queued work, so a second edit could start inside the
+    first one's dialog or transaction.
+Test
+  - A3.
+
+12  plugin/Edit/EditContext.cs
+------------------------------
+Added
+  - MaxWarnings = 200; after it, one summary line "... N more warning(s) not
+    listed" that counts the rest.
+Removed
+  - Unlimited Warnings.Add in Warn().
+Modified
+  - Warn().
+Why
+  - M14: parts_to_section_views warns once per part and view; a large network
+    produced tens of thousands of warnings and a reply of many megabytes.
+Test
+  - C10.
+
+13  plugin/Edit/ObjectOps.cs
+----------------------------
+Added
+  - entity_copy groups the entities by owner and copies each group with
+    Database.DeepCloneObjects into that same owner, then moves the copies.
+Removed
+  - Entity.Clone() and the append to model space.
+Modified
+  - EntityCopy.
+Why
+  - M10: Clone() leaves out owned sub-objects (a block reference's
+    attributes, the vertices of 2D/3D polylines), and the copy always went to
+    model space, even when the original was on a layout.
+Test
+  - C1, C2.
+
+14  plugin/Edit/BlockOps.cs
+---------------------------
+Added
+  - block_define: DeepCloneObjects of the entities into the new block, one
+    call per owner (the API takes objects of one owner per call).
+  - replace_originals: the block reference is placed in the originals' own
+    space; originals from more than one space are refused.
+Removed
+  - Entity.Clone() into the block definition.
+Modified
+  - Import() (block_import, title_block_insert) uses NeedFullPath.
+Why
+  - M10: as in 13; and the replacing reference went to model space for
+    entities on a layout.
+  - M12: relative paths.
+Test
+  - C3, C8.
+
+15  plugin/Edit/ExtraOps.cs
+---------------------------
+Added
+  - GravityParts_(..., allowAll): part_swap passes allowAll false and is
+    refused without "names" or "handles".
+  - Handles are checked to be pipes or structures of the named network.
+Removed
+  - The "as Part ?? throw" cast for handles (replaced by the membership
+    check).
+Modified
+  - profile_derive (corridor_feature_line): index via IndexParam.
+  - parts_to_section_views keeps its default of all parts.
+Why
+  - H6: without names or handles, part_swap targeted every pipe AND
+    structure of the network with one part spec, and a handle from another
+    network was swapped using this network's parts list.
+  - M11: a bad "index" silently picked the first feature line.
+Test
+  - C4, C5, C7.
+
+16  plugin/Edit/GeometryOps.cs
+------------------------------
+Added
+  - None.
+Removed
+  - IntParam(e, "index", -1, 0, 100000) in feature_line_edit.
+Modified
+  - feature_line_edit "elevations" and "radii": index via NeedIndex.
+  - points_export: path via NeedFullPath.
+Why
+  - M11: a missing or non-integer index became -1 and failed with an unclear
+    API error, or a wrong value picked another point.
+  - M12: a relative path was written under Civil 3D's current folder.
+Test
+  - C6, C8.
+
+17  plugin/Edit/ModelOps.cs
+---------------------------
+Added
+  - None.
+Removed
+  - Path.GetFullPath before the path checks.
+Modified
+  - FeatureLine() (corridor_feature_line_export, corridor_slope_pattern_add):
+    index via IndexParam.
+  - ExistingFile() (surface_definition_add dem / breakline_file,
+    surface_create_from landxml / dem / tin_file) and surface_solids_create
+    "file": paths via NeedFullPath.
+Why
+  - M11, M12.
+Test
+  - C7, C8.
+
+18  plugin/Edit/CivilOps.cs
+---------------------------
+Added
+  - None.
+Removed
+  - The bare NeedStr path in points_import.
+Modified
+  - points_import: path via NeedFullPath.
+Why
+  - M12: File.Exists and ImportPoints resolved a relative path against Civil
+    3D's current folder.
+Test
+  - C8.
+
+19  plugin/Edit/SheetOps.cs
+---------------------------
+Added
+  - None.
+Removed
+  - Path.GetFullPath before the path check.
+Modified
+  - layout_from_template: path via NeedFullPath.
+Why
+  - M12.
+Test
+  - C8.
+
+20  plugin/Edit/PressureOps.cs
+------------------------------
+Added
+  - A warning when Civil 3D gives a new pressure part another name than the
+    one asked for.
+Removed
+  - None.
+Modified
+  - Describe(): the existing warning for a refused name is kept.
+Why
+  - M15: Civil 3D could rename a part without an error; the WaterGEMS cover
+    check maps built pipes back by name and lost them silently.
+Test
+  - B3.
+
+21  plugin/Edit/AlignmentOps.cs
+-------------------------------
+Added
+  - sample_lines_create: a warning when the interval reaches the 5000-line
+    cap before the end of the alignment.
+Removed
+  - e.GetString() in sample_sources_set.
+Modified
+  - sample_sources_set: "sources" via NameSet.
+Why
+  - M14: the cap cut the sample lines short without saying so.
+  - M16: a number in "sources" threw a raw .NET message.
+Test
+  - C13.
+
+
+PART PICKERS (plugin/Parts)
+===========================
+
+22  plugin/Parts/GravityParts.cs
+--------------------------------
+Added
+  - None.
+Removed
+  - IntParam(spec, "size_index", -1, -1, int.MaxValue).
+Modified
+  - size_index via IndexParam: a text or fractional value is refused instead
+    of becoming -1.
+Why
+  - M11: "size_index": "2" was reported as "size_index -1 is out of range",
+    which hid the real mistake.
+Test
+  - C7 (same rule as the other indexes).
+
+
+READ ACTIONS (plugin/Read)
+==========================
+
+23  plugin/Read/DataRead.cs
+---------------------------
+Added
+  - MaxSamplesPerPipe = 2000 for pipe_ground_profile; the sampling step grows
+    on long pipes so a pipe never has more samples.
+  - sample_surface refuses an interval that would give more than 20000
+    samples.
+  - get_user_property_values: each point number is checked and a bad item is
+    named.
+Removed
+  - e.GetString() / e.GetUInt32() on list items.
+  - sample_surface's silent cut at 20000 samples (the end of the line was
+    appended after a gap).
+Modified
+  - get_part_data "parts" / "fields", get_user_property_values "names",
+    get_corridor_section "codes", pipe_ground_profile "pipes": NameSet;
+    get_sections "surfaces": Text.
+Why
+  - M14: a tiny interval on long pipes built millions of rows on Civil 3D's
+    main thread; sample_surface returned a gap without saying so.
+  - M16: a number in a name list threw a raw .NET message.
+Test
+  - C11, C12.
+
+24  plugin/Read/SheetRead.cs
+----------------------------
+Added
+  - Attributes(): tag -> value of a block reference; a repeated tag keeps the
+    last value.
+Removed
+  - ToDictionary over the attributes in inspect_file.
+Modified
+  - inspect_file: path via NeedFullPath; attributes via Attributes().
+Why
+  - M13: title blocks often repeat a tag; ToDictionary threw and the whole
+    inspection failed.
+  - M12: relative paths.
+Test
+  - C8, C9.
+
+25  plugin/Read/SaveCheck.cs
+----------------------------
+Added
+  - New file. diagnose_save (read only, the drawing is not changed):
+    1. header: CLAYER, TEXTSTYLE, DIMSTYLE, CELTYPE, CMATERIAL, CMLEADERSTYLE,
+       CTABLESTYLE, CDETAILVIEWSTYLE, CSECTIONVIEWSTYLE must point at live
+       objects; CANNOSCALE must be in the annotation scale list;
+    2. scan: every object (handles 1 to HANDSEED) is written with
+       DBObject.DwgOut through ProbeFiler, a DwgFiler subclass that stores
+       nothing (FileFiler by default, as a save; "copy" as an option).
+       Objects whose writing throws or sets a filer error are listed, as are
+       objects that write a hard owner or hard pointer to an erased or invalid
+       object; soft pointers are counted, listed with soft_refs: true;
+    3. save_copy: Database.Wblock() + SaveAs to %TEMP%, then the file is
+       deleted.
+    Also reports DBMOD, SAVETIME and SAVEFILEPATH.
+Removed
+  - None.
+Modified
+  - None.
+Why
+  - S1: the message gave no object or step. This check names the object
+    (handle, type, owner, layer, Civil 3D name) and, run after each edit by
+    tests/save_live.py, the edit that caused it. DwgOut and DwgFiler exist in
+    the 2024, 2025 and 2027 APIs.
+Risk
+  - The probe filer is ours, not AutoCAD's. Confirmed in the live test: as a
+    FileFiler it crashed Civil 3D 2027 (see 33); only the copy filer is used.
+Test
+  - E1-E6.
+
+
+TESTS
+=====
+
+26  tests/save_live.py
+----------------------
+Added
+  - New file. Replays the 0.15-0.19 live suites (civil, data, geometry,
+    extras, model) in that order in ONE new drawing, as in the session where
+    the save failure was seen. It wraps bridge_client.call so that after every
+    edit call (applied or rolled back) it runs diagnose_save, and stops at the
+    first edit that leaves the drawing unsavable. It reports the suite, edit
+    number and title, operations, whether the edit was applied, and the
+    objects responsible. After each suite it runs a full check that writes a
+    real copy. It checks the empty drawing first.
+  - Options: --suites, --check edit|suite, --copy-each-edit,
+    --keep-going.
+  - Output: tests/results/save.txt (via run_save.bat) and
+    tests/results/save_check.json.
+Removed
+  - None.
+Modified
+  - None.
+Why
+  - S1: find the step and the element that make the drawing unsavable.
+Test
+  - E1-E5.
+
+27  tests/run_save.bat
+----------------------
+Added
+  - New file. Runs save_live.py with the server's venv, passes options on,
+    writes tests/results/save.txt.
+Removed
+  - None.
+Modified
+  - None.
+Why
+  - The same way of running as the other live suites (run_model.bat etc.).
+
+
+DOCUMENTATION
+=============
+
+28  docs/AUDIT_TEST_PLAN.md
+---------------------------
+Added
+  - New file. One-pass test plan: A transport, B imports, C changed
+    operations, D behaviour to confirm before the next fix, E save failure.
+Why
+  - Test every change in one session.
+
+29  docs/AUDIT_FIXES.log
+------------------------
+Added
+  - This file.
+Why
+  - Track every audit change and the reason for it.
+
+30  docs/ACTIONS.md
+-------------------
+Modified
+  - Regenerated by tools/gen_docs.py: diagnose_save, the dry-run note and
+    part_swap.
+Why
+  - tests/smoke_test.py fails when the file does not match the catalogue.
+
+31  README.md
+-------------
+Modified
+  - "70 read actions" -> "71 read actions".
+  - Live test table: a row for tests\run_save.bat.
+Why
+  - smoke_test checks the counts; the new test is listed with the others.
+
+32  CHANGELOG.md
+----------------
+Added
+  - "Unreleased (audit fixes, not yet versioned)" section.
+Why
+  - Release notes for the next version.
+
+
+AUDIT FINDINGS NOT CHANGED (and why)
+====================================
+H4  File writes after the one-time grant (save as / overwrite, points_export,
+    plot_pdf, surface solids) can reach any folder; inspect_file reads any
+    DWG without permission; the grant is per drawing, not per client.
+    Not changed: allowed folders, extensions and per-client permission are a
+    policy decision for the project owner.
+H5  pipe_set "inner_diameter": the catalogue says catalogue units (mm), the
+    API call uses drawing units (m) and snaps to the closest size.
+    Not changed until D1 confirms which units the API takes.
+H7  block_import replace: true also replaces same-named layers and styles.
+    Not changed until D4 confirms; the fix (clear the block, clone its
+    content with Ignore) changes the operation's behaviour.
+H8  set_current of a style created in the same batch: after a rollback the
+    current-style setting may point at an erased style. Not changed until D3
+    (and E) confirm; diagnose_save reports it as a header problem.
+M8  The tool description is about 40 KB. Not changed: shortening it changes
+    what the assistant knows without calling help.
+M9  Cancelling a call does not stop an edit already in Civil 3D (by design,
+    so a batch is never left half done); check get_edit_status after a
+    cancel.
+--  pressure_network_erase may leave the parts (D2); surface_solids_create
+    deletes the old file before writing (D7); network_interference on one
+    pressure network reports pipes joined at fittings (D6); assembly_create
+    may not chain subassemblies (D5); labels and section views are duplicated
+    on a re-run (D8); surface_extract contours have no count limit.
+    Not changed: each needs the Civil 3D behaviour confirmed first.
+--  2027 obsolete-API warnings (ProfilePVI.Station, Part.AddToSectionView,
+    Catchment members): working today; to be replaced in a later release.
+--  Low findings (metric-only labels, dynamic block angles in radians, leader
+    text style, description key set order, etc.): unchanged; listed in the
+    audit report.
+
+
+FIXES FROM THE LIVE TEST (2026-11-25, Civil 3D 2027)
+===================================================
+
+33  plugin/Read/SaveCheck.cs, server/catalog.py, tests/save_live.py
+-------------------------------------------------------------------
+Found
+  - diagnose_save crashed Civil 3D 2027 (process gone, error report dialog)
+    on the first call in an EMPTY drawing. tests/save_probe.py narrowed it:
+    header check, the %TEMP% copy and a copy-filer scan of 5 objects pass;
+    the scan with the default FileFiler crashes within the first 5 objects.
+    Native objects written to a managed DwgFiler of type FileFiler expect
+    AutoCAD's own file filer.
+Removed
+  - The "filer" option (file | copy) and the FileFiler default; --filer in
+    save_live.py.
+Modified
+  - The scan always uses the copy filer; filer: "file" is refused with a
+    message. The real save check is the %TEMP% copy (Wblock + SaveAs).
+Added
+  - tests/save_probe.py + run_save_probe.bat: steps through the stages of
+    diagnose_save, logging each before it runs, so a crash names its stage.
+
+34  plugin/Edit/ExtraOps.cs, plugin/Edit/EditContext.cs, plugin/Edit/EditEngine.cs
+--------------------------------------------------------------------------------
+Found (root cause of S1)
+  - tests/run_save.bat: the drawing stays savable through the civil, data and
+    geometry suites and extras edits 29-43; after extras edit #44
+    (section_volume_tables) the three new AECC_SECTION_VIEW_QUANTITY_TAKEOFF_
+    TABLE objects are open for write after the edit committed, minutes later
+    and after REGEN. A real copy fails with eWasOpenForWrite, and quitting
+    such a drawing ended once in "FATAL ERROR: Unhandled Access Violation".
+  - tests/voltable_probe.py: every way of calling SectionView.VolumeTables.
+    CreateVolumeTable leaves the table open (section view open for write in
+    the edit's transaction, in a nested transaction, in an open-close
+    transaction; total-volume and material tables). Opening the section view
+    for read aborts Civil 3D (eNotOpenForWrite). Inside the edit's
+    transaction the table is readable; the stray open appears when the
+    transaction ends, also when it is rolled back. No extra transaction is
+    left active. Opening the table for notify and closing it does not
+    release it; asking that notify-opened object for DowngradeOpen (it
+    reports eWasOpenForWrite) and then closing it does: the table is
+    readable and a real copy of the drawing is written.
+Added
+  - EditContext.AfterEnd: work run once the batch's transaction is gone, on
+    every path (committed, rolled back on an error, dry run), inside the
+    document lock. EditEngine runs it (RunAfterEnd, never throws).
+  - ExtraOps.ReleaseStrayOpens(): for each table section_volume_tables made,
+    if it cannot be opened for read: open for notify, DowngradeOpen, Close
+    (up to 3 times); a table that stays open is reported in the warnings
+    (the drawing cannot be saved until Civil 3D is restarted).
+Modified
+  - section_volume_tables registers the release in AfterEnd.
+  - diagnose_save also reports activeTransactions.
+  - save_live.py counts objects that cannot be opened (left open by
+    something else) in its one-line summary; before it said "0 object(s)
+    fail to write".
+Test
+  - E1 (run_save.bat) must pass extras #44 and end SAVE CHECK CLEAN; then
+    QUIT and answer No.
+
+FIXES AFTER THE AUDIT TEST (2026-11-25, decided with the user)
+=============================================================
+
+35  plugin/Bridge/BridgeServer.cs, plugin/Read/DrawingRead.cs, server/catalog.py
+-------------------------------------------------------------------------------
+Found (A2)
+  - ping got no answer while the permission dialog was open: every read runs
+    on Civil 3D's main thread, which the modal dialog holds.
+Modified
+  - ping (without a target) waits at most 2 s for the main thread; then it
+    answers off that thread with busy: true, editRunning, the last known
+    active drawing, the bridge version, pid and instances.
+Test
+  - A2 (run_transport_edit.bat): answered in 2.0 s with busy: true.
+
+36  plugin/Bridge/EditRequests.cs
+-------------------------------
+Found (A3)
+  - A second edit during the permission dialog was refused only after the
+    30 s queue timeout ("Civil 3D did not become available"): the dialog does
+    not pump the queued work, so EditEngine's guard was never reached.
+Modified
+  - EditRequests counts edits (and dry runs) between arrival and reply and
+    refuses a second one at once with "Another MCP edit is still running".
+    It is refused before it is recorded, so the same request_id can be sent
+    again later. A retry of the running request_id still gets its pending
+    ledger entry.
+Test
+  - A3: refused in 0.0 s; the resend applied; exactly two lines drawn.
+
+37  server/sewergems.py, server/watergems.py
+------------------------------------------
+Found (B2)
+  - A retry with the same request_id that arrived while the first call was
+    in a later phase (SewerGEMS profile layout) returned built: false with
+    finish.state "pending", without a top-level pending flag.
+Modified
+  - SewerGEMS: a pending finish (from get_edit_status or from the bridge's
+    ledger reply) returns pending: true with a call-again note.
+  - WaterGEMS: the same for the labels/profiles and profile layout phases.
+Test
+  - B2 (run_imports_sewer.bat): pending: true.
+
+38  plugin/Edit/BlockOps.cs, server/catalog.py
+--------------------------------------------
+Found (D4)
+  - block_import replace: true cloned with DuplicateRecordCloning.Replace,
+    which also overwrote same-named layers and styles of the drawing
+    (MCP-SHARED yellow -> blue).
+Modified
+  - Everything is cloned with Ignore. A block being replaced is redefined in
+    place: its content is erased and the file's block content cloned in.
+    The drawing's layers and styles never change; new ones are added.
+Test
+  - run_fixes.bat: reference 10 m -> 20 m wide, no layer colour changed.
+
+39  plugin/Edit/CorridorOps.cs
+----------------------------
+Found (D5)
+  - assembly_create put every subassembly at the baseline (BasicShoulder
+    overlapped the lane).
+Modified
+  - A subassembly on the same side as an earlier one is attached to that
+    one's outermost top point (Assembly.AddSubassembly(id, point)); the
+    reply gives attachedTo. If attaching fails, a warning and the baseline.
+Test
+  - run_fixes.bat: EPS at 4.5 m beyond ETW at 3.6 m; shoulder attached to ETW.
+
+40  plugin/Read/CivilRead.cs
+--------------------------
+Found (D6)
+  - network_interference within one pressure network reported pipes joined
+    at a bend (gap 0.144 m): pressure pipes carried no connection info.
+Modified
+  - Pressure pipes carry StartPartId / EndPartId; within one network, pipes
+    sharing a structure or fitting, or joined directly, are skipped and
+    counted in connectedPairsSkipped.
+Test
+  - run_fixes.bat: found 0, connectedPairsSkipped 1.
+
+41  plugin/Edit/ModelOps.cs
+-------------------------
+Found (D7)
+  - surface_solids_create with file + overwrite deleted the old file before
+    the solids were made; a failed creation left no file.
+Modified
+  - Written to a temporary file next to the target; the old file is replaced
+    only when the solids were made; the temporary file is always removed.
+Test
+  - run_fixes.bat: old file kept after a failed creation; replaced after a
+    successful one.
+
+42  plugin/Edit/EditContext.cs, GravityOps.cs, PressureOps.cs, StyleOps.cs
+------------------------------------------------------------------------
+Found (D8)
+  - labels_add, network_styles (label styles) and pressure_labels_add added a
+    second set of labels on every run.
+Added
+  - EditContext.LabelsByPart<T>(): plan labels of model space by labelled part.
+Modified
+  - labels_add / pressure_labels_add skip parts that already have a plan label
+    of that kind (alreadyLabelled in the reply).
+  - network_styles restyles a part's existing plan labels instead of adding
+    one (labelsRestyled in the reply).
+Test
+  - run_fixes.bat: counts unchanged on the second run; 3 skipped / restyled.

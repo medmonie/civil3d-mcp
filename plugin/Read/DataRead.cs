@@ -24,8 +24,8 @@ internal static class DataRead
         string network = NeedStr(p, "network");
         string kind = Choice(p, "kind", "all", "all", "pipes", "structures", "fittings", "appurtenances");
         int limit = IntParam(p, "limit", 200, 1, 5000);
-        var only = ArrParam(p, "parts", 5000).Select(e => e.GetString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var fieldFilter = ArrParam(p, "fields", 200).Select(e => e.GetString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var only = NameSet(p, "parts", 5000);
+        var fieldFilter = NameSet(p, "fields", 200);
         bool Want(string name) => only.Count == 0 || only.Contains(name);
         bool WantField(params string?[] names) => fieldFilter.Count == 0 || names.Any(n => n != null && fieldFilter.Contains(n));
         var rows = new List<object>();
@@ -141,7 +141,8 @@ internal static class DataRead
         int total = 0;
         if (kind == "point")
         {
-            var numbers = ArrParam(p, "numbers", 20000).Select(e => e.GetUInt32()).ToHashSet();
+            var numbers = ArrParam(p, "numbers", 20000).Select((e, i) => e.ValueKind == JsonValueKind.Number && e.TryGetUInt32(out var n) ? n
+                : throw new ArgumentException($"numbers item {i + 1} must be a point number.")).ToHashSet();
             foreach (ObjectId id in Civ.CogoPoints)
             {
                 var pt = (CivilDb.CogoPoint)tr.GetObject(id, OpenMode.ForRead);
@@ -153,7 +154,7 @@ internal static class DataRead
         }
         else
         {
-            var names = ArrParam(p, "names", 20000).Select(e => e.GetString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var names = NameSet(p, "names", 20000);
             foreach (ObjectId sid in Civ.GetSiteIds())
             {
                 var site = (CivilDb.Site)tr.GetObject(sid, OpenMode.ForRead);
@@ -183,7 +184,7 @@ internal static class DataRead
         var al = FindAlignment(Civ, tr, NeedStr(p, "alignment"));
         string? groupName = StrParam(p, "group");
         double from = DblParam(p, "from_station") ?? double.MinValue, to = DblParam(p, "to_station") ?? double.MaxValue;
-        var wanted = ArrParam(p, "surfaces", 100).Select(e => e.GetString() ?? "").ToList();
+        var wanted = ArrParam(p, "surfaces", 100).Select(Text).ToList();
         int limit = IntParam(p, "limit", 50, 1, 2000);
         int maxPoints = IntParam(p, "max_points", 500, 2, 10000);
         var rows = new List<object>();
@@ -249,7 +250,7 @@ internal static class DataRead
         var cor = FindCorridor(Civ, tr, NeedStr(p, "corridor"));
         string? baselineName = StrParam(p, "baseline");
         double station = NeedDbl(p, "station");
-        var codes = ArrParam(p, "codes", 200).Select(e => e.GetString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var codes = NameSet(p, "codes", 200);
         CivilDb.Baseline? bl = null;
         foreach (CivilDb.Baseline b in cor.Baselines)
             if (baselineName == null || SameName(b.Name, baselineName) || SameName((NameOf(tr, () => b.AlignmentId) as string) ?? "", baselineName)) { bl = b; break; }
@@ -335,6 +336,8 @@ internal static class DataRead
             if (interval is double step && step > 0)
             {
                 int n = (int)Math.Min(20000, Math.Floor(length / step));
+                if (Math.Floor(length / step) > 20000)
+                    throw new ArgumentException($"sample_surface: interval {step} gives more than 20000 samples over {R3(length)}; use a larger interval.");
                 var chain = Enumerable.Range(0, n + 1).Select(i => i * step).ToList();
                 if (length - chain[chain.Count - 1] > 1e-6) chain.Add(length);
                 foreach (var d in chain)
@@ -367,6 +370,8 @@ internal static class DataRead
     /// Ground along the pipes of a network: at both ends and every 'interval', the surface elevation, the pipe's
     /// invert / centre / outside top, and the cover to the outside top. Facts only.
     /// </summary>
+    private const int MaxSamplesPerPipe = 2000;
+
     public static object PipeGroundProfile(JsonElement p) => WithRead((db, tr) =>
     {
         var tin = Tin(tr, NeedStr(p, "surface"));
@@ -374,7 +379,7 @@ internal static class DataRead
         double step = DblParam(p, "interval") ?? 5.0;
         if (step <= 0) throw new ArgumentException("pipe_ground_profile: interval must be > 0.");
         int limit = IntParam(p, "limit", 200, 1, 5000);
-        var only = ArrParam(p, "pipes", 5000).Select(e => e.GetString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var only = NameSet(p, "pipes", 5000);
         var segs = new List<(string name, Point3d a, Point3d b, double innerHalf, double outerHalf)>();
         if (TryFindPressureNetwork(Civ, tr, network) is { } pnet)
         {
@@ -402,8 +407,10 @@ internal static class DataRead
             if (only.Count > 0 && !only.Contains(s.name)) continue;
             if (++total > limit) continue;
             double len = new Point2d(s.a.X, s.a.Y).GetDistanceTo(new Point2d(s.b.X, s.b.Y));
+            // at most MaxSamplesPerPipe samples per pipe: a tiny interval on long pipes would otherwise build millions of rows
+            double pipeStep = Math.Max(step, len / MaxSamplesPerPipe);
             var chain = new List<double>();
-            for (double d = 0; d < len - 1e-6; d += step) chain.Add(d);
+            for (double d = 0; d < len - 1e-6; d += pipeStep) chain.Add(d);
             chain.Add(len);
             var samples = chain.Select(d =>
             {

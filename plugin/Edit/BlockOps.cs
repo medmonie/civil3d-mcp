@@ -83,18 +83,20 @@ internal static class BlockOps
         var def = new BlockTableRecord { Name = name, Origin = basePoint };
         var defId = bt.Add(def);
         c.Tr.AddNewlyCreatedDBObject(def, true);
-        foreach (var e in ents)
-        {
-            var copy = (Entity)e.Clone();
-            def.AppendEntity(copy);
-            c.Tr.AddNewlyCreatedDBObject(copy, true);
-        }
+        // DeepCloneObjects keeps owned sub-objects (attributes of nested block references, polyline vertices). It takes
+        // objects of one owner per call, so entities from several spaces are cloned group by group.
+        foreach (var group in ents.GroupBy(e => e.OwnerId))
+            c.Db.DeepCloneObjects(new ObjectIdCollection(group.Select(e => e.ObjectId).ToArray()), defId, new IdMapping(), false);
 
         string? inserted = null;
         if (BoolParam(p, "replace_originals") ?? false)
         {
+            // the block reference goes where the originals were (a layout's paper space or model space)
+            var owners = ents.Select(e => e.OwnerId).Distinct().ToList();
+            if (owners.Count != 1) throw new ArgumentException("block_define: replace_originals needs entities from one space (model or one layout).");
+            var space = (BlockTableRecord)c.Tr.GetObject(owners[0], OpenMode.ForWrite);
             foreach (var e in ents) e.Erase();
-            inserted = H(c.Append(new BlockReference(basePoint, defId), p));
+            inserted = H(c.Append(new BlockReference(basePoint, defId), StrParam(p, "layer"), space));
         }
         return new { block = name, entities = ents.Count, insertedHandle = inserted };
     }
@@ -141,7 +143,7 @@ internal static class BlockOps
     /// <summary>Copy block definitions (or the whole file as one block) into this drawing; returns the names brought in.</summary>
     internal static List<string> Import(EditContext c, JsonElement p, string op, out List<string> skipped)
     {
-        string path = Path.GetFullPath(NeedStr(p, "path"));
+        string path = NeedFullPath(p, "path", op);
         bool replace = BoolParam(p, "replace") ?? false;
         var bt = (BlockTable)c.Tr.GetObject(c.Db.BlockTableId, OpenMode.ForRead);
         var names = Has(p, "blocks") ? StrList(p, "blocks", 200) : Has(p, "block") ? new List<string> { NeedStr(p, "block") } : new List<string>();
@@ -181,7 +183,11 @@ internal static class BlockOps
             imported.Add(name);
             return imported;
         }
+        // Layers, text styles and other table records the drawing already has are never changed: everything is cloned
+        // with DuplicateRecordCloning.Ignore. A block being replaced is redefined in place (its content swapped), not
+        // replaced as a record, because Replace would also overwrite same-named layers and styles.
         var ids = new ObjectIdCollection();
+        var redefine = new List<(BlockTableRecord Def, Point3d Origin, ObjectIdCollection Content)>();
         using (var st = side.TransactionManager.StartTransaction())
         {
             var sbt = (BlockTable)st.GetObject(side.BlockTableId, OpenMode.ForRead);
@@ -190,15 +196,27 @@ internal static class BlockOps
                 if (!sbt.Has(name)) throw new ArgumentException($"{op}: block '{name}' is not in {Path.GetFileName(path)}.");
                 var rec = (BlockTableRecord)st.GetObject(sbt[name], OpenMode.ForRead);
                 if (rec.IsLayout) throw new ArgumentException($"{op}: '{name}' is a layout, not a block.");
-                if (bt.Has(rec.Name) && !replace) { skipped.Add(rec.Name); continue; }
-                ids.Add(rec.ObjectId);
+                if (!bt.Has(rec.Name)) { ids.Add(rec.ObjectId); imported.Add(rec.Name); continue; }
+                if (!replace) { skipped.Add(rec.Name); continue; }
+
+                var def = (BlockTableRecord)c.Tr.GetObject(bt[rec.Name], OpenMode.ForWrite);
+                if (def.IsLayout || def.IsFromExternalReference) throw new ArgumentException($"{op}: '{rec.Name}' is a layout or an xref, not a block.");
+                var content = new ObjectIdCollection();
+                foreach (ObjectId id in rec) content.Add(id);
+                redefine.Add((def, rec.Origin, content));
                 imported.Add(rec.Name);
             }
             st.Commit();
         }
+        foreach (var (def, origin, content) in redefine)
+        {
+            foreach (ObjectId id in def) c.Tr.GetObject(id, OpenMode.ForWrite).Erase();
+            def.Origin = origin;
+            if (content.Count > 0)
+                side.WblockCloneObjects(content, def.ObjectId, new IdMapping(), DuplicateRecordCloning.Ignore, false);
+        }
         if (ids.Count > 0)
-            side.WblockCloneObjects(ids, c.Db.BlockTableId, new IdMapping(),
-                replace ? DuplicateRecordCloning.Replace : DuplicateRecordCloning.Ignore, false);
+            side.WblockCloneObjects(ids, c.Db.BlockTableId, new IdMapping(), DuplicateRecordCloning.Ignore, false);
         return imported;
     }
 

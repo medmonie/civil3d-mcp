@@ -727,6 +727,16 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
     ]
     core = _edit(target, request_id, core_ops, "network", dry_run)
     summary = _summary(plan, o)
+    if core.get("state") == "pending":
+        return {"built": False, "pending": True, "target": target, "request_id": request_id,
+                "note": "This import is still running in Civil 3D. Call again later with the same request_id."}
+    if core.get("applied") and not isinstance(core.get("results"), list):
+        # A retry whose recorded reply has expired from the bridge cache: the network exists, but the created part
+        # handles needed for labels and profiles are no longer known.
+        return {"built": False, "network": o["network"], "networkCommitted": True, "target": target,
+                "request_id": request_id, "core": core,
+                "note": "The network was committed by an earlier call, but its detailed reply has expired. Finish labels "
+                        "and profiles by hand, or erase the network (pressure_network_erase) and import with a new request_id."}
     if not core.get("applied"):
         return {"built": False, "dryRun": dry_run, "networkCommitted": False, "target": target, "core": core,
                 **({"plan": summary} if dry_run else {})}
@@ -767,8 +777,16 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
         bad = [f"{r.get('op')}: {r.get('error')}" for r in reply.get("results", []) if r.get("error")]
         return "; ".join(bad) or str(reply.get("error") or "rolled back")
 
+    def still_running(stage: str) -> dict[str, Any]:
+        # The same request_id is still running this stage (a retry sent while the first call works): not a failure.
+        return {"built": False, "pending": True, "network": net, "networkCommitted": True, "target": target,
+                "request_id": request_id, "stages": {**stages, stage: "running"},
+                "note": "This import is still running in Civil 3D. Call again later with the same request_id."}
+
     try:
         profiles = _edit(target, str(uuid5(UUID(request_id), "watergems-profiles")), profile_ops, "labels and profiles")
+        if profiles.get("state") == "pending":
+            return still_running("labels and profiles")
         stages["labels and profiles"] = "committed" if profiles.get("applied") else "rolled back: " + failed("profiles", profiles)
         if lines:
             if profiles.get("applied"):
@@ -785,6 +803,8 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
                     top -= y1 - y0 + o["profile_view_gap"]
                 if moves:
                     layout = _edit(target, str(uuid5(UUID(request_id), "watergems-layout")), moves, "profile layout")
+                    if layout.get("state") == "pending":
+                        return still_running("profile layout")
                     stages["profile layout"] = "committed" if layout.get("applied") else "rolled back: " + failed("layout", layout)
     except Exception as exc:       # noqa: BLE001 - whatever failed, say that the network is already in the drawing
         stages.setdefault("labels and profiles", f"failed: {type(exc).__name__}: {exc}")

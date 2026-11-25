@@ -172,6 +172,7 @@ internal static class PressureOps
         {
             try { part.Name = name; }
             catch (Exception ex) { c.Warn($"{what}: name '{name}' was not accepted ({ex.Message}); kept '{part.Name}'."); }
+            if (part.Name != name) c.Warn($"{what}: Civil 3D named it '{part.Name}' instead of '{name}' (is the name already used?).");
         }
         if (StrParam(s, "description") is string d) part.Description = d;
     }
@@ -265,8 +266,12 @@ internal static class PressureOps
         var used = new Dictionary<string, object?>();
         HashSet<string>? only = Has(p, "handles") ? StrList(p, "handles", 20000).ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
 
-        // Labels every part of one kind with one style; returns how many were labelled.
-        int Label(string kind, ObjectIdCollection parts, CivilStyles.StyleCollectionBase styles, Action<ObjectId, ObjectId> create)
+        int skipped = 0;
+
+        // Labels every part of one kind with one style; returns how many were labelled. A part that already has a
+        // plan label of that kind is skipped, so running this again does not stack a second label.
+        int Label(string kind, ObjectIdCollection parts, CivilStyles.StyleCollectionBase styles,
+                  Dictionary<ObjectId, List<ObjectId>> labelled, Action<ObjectId, ObjectId> create)
         {
             if (!(BoolParam(p, kind + "s") ?? true)) return 0;
             var style = Styles.Id(styles, StrParam(p, kind + "_style"), $"pressure {kind} label style");
@@ -275,18 +280,20 @@ internal static class PressureOps
             foreach (ObjectId id in parts)
             {
                 if (only != null && !only.Contains(H(id))) continue;
+                if (labelled.ContainsKey(id)) { skipped++; continue; }
                 create(id, style);
                 made++;
             }
             return made;
         }
 
-        int pipes = Label("pipe", net.GetPipeIds(), Styles.PressurePipeLabels(c.Civ),
+        int pipes = Label("pipe", net.GetPipeIds(), Styles.PressurePipeLabels(c.Civ), c.LabelsByPart<CivilDb.PressurePipeLabel>(),
             (id, style) => CivilDb.PressurePipeLabel.Create(id, middle, style));
-        int fittings = Label("fitting", net.GetFittingIds(), Styles.PressureFittingLabels(c.Civ),
+        int fittings = Label("fitting", net.GetFittingIds(), Styles.PressureFittingLabels(c.Civ), c.LabelsByPart<CivilDb.PressureFittingLabel>(),
             (id, style) => CivilDb.PressureFittingLabel.Create(id, style, middle, Vector3d.XAxis));
-        int appurtenances = Label("appurtenance", net.GetAppurtenanceIds(), Styles.PressureAppurtenanceLabels(c.Civ),
+        int appurtenances = Label("appurtenance", net.GetAppurtenanceIds(), Styles.PressureAppurtenanceLabels(c.Civ), c.LabelsByPart<CivilDb.PressureAppurtenanceLabel>(),
             (id, style) => CivilDb.PressureAppurtenanceLabel.Create(id, style, middle, Vector3d.XAxis));
-        return new { network = net.Name, pipeLabels = pipes, fittingLabels = fittings, appurtenanceLabels = appurtenances, stylesUsed = used };
+        return new { network = net.Name, pipeLabels = pipes, fittingLabels = fittings, appurtenanceLabels = appurtenances,
+                     alreadyLabelled = skipped, stylesUsed = used };
     }
 }

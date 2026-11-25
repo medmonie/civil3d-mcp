@@ -5,16 +5,32 @@ namespace C3dMcpBridge;
 /// <summary>Drawing-level read actions: connection, layers, entity counts, selection, objects by handle.</summary>
 internal static class DrawingRead
 {
+    private static volatile string? _lastActiveDrawing;
+
     public static object Ping(JsonElement p) => new
     {
         bridgeVersion = BridgeInfo.Version,
         acadVersion = Safe(() => CoreApp.GetSystemVariable("ACADVER")?.ToString()),
         product = Safe(() => CoreApp.GetSystemVariable("PRODUCT")?.ToString()),
-        activeDrawing = AcApp.DocumentManager.MdiActiveDocument?.Name,
+        activeDrawing = _lastActiveDrawing = AcApp.DocumentManager.MdiActiveDocument?.Name,
         editingAllowed = WriteGate.Granted,
         pid = Environment.ProcessId,
         isTarget = BridgeServer.IsTarget,
         otherInstances = BridgeServer.OtherInstances(),
+    };
+
+    /// <summary>The ping reply when Civil 3D's main thread is busy. Built off that thread: no Civil 3D API calls.</summary>
+    public static object PingBusy() => new
+    {
+        bridgeVersion = BridgeInfo.Version,
+        busy = true,
+        editRunning = EditRequests.EditRunning,
+        lastActiveDrawing = _lastActiveDrawing,
+        pid = Environment.ProcessId,
+        isTarget = BridgeServer.IsTarget,
+        otherInstances = BridgeServer.OtherInstances(),
+        note = "Civil 3D is reachable but its main thread is busy (the MCP permission dialog, a command or a long regen), " +
+               "so the drawing details are left out. Answer the dialog or wait, then try again.",
     };
 
     public static object GetDrawingInfo(JsonElement p)

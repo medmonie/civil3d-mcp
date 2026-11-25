@@ -43,7 +43,7 @@ internal static class ExtraOps
             case "corridor_feature_line":
             {
                 var cor = FindCorridor(c.Civ, c.Tr, NeedStr(p, "corridor"));
-                var fl = CorridorFeatureLine(cor, StrParam(p, "baseline"), NeedStr(p, "code"), IntParam(p, "index", 0, 0, 1000));
+                var fl = CorridorFeatureLine(cor, StrParam(p, "baseline"), NeedStr(p, "code"), IndexParam(p, "index", 0, 1000));
                 var al = FindAlignment(c.Civ, c.Tr, NeedStr(p, "alignment"));
                 id = CivilDb.Profile.CreateFromFeatureLine(name, fl, al.ObjectId, layer, style, labels);
                 on = al.Name;
@@ -297,13 +297,22 @@ internal static class ExtraOps
         };
     }
 
-    private static List<CivilDb.Part> GravityParts_(EditContext c, CivilDb.Network net, JsonElement p, string op)
+    private static List<CivilDb.Part> GravityParts_(EditContext c, CivilDb.Network net, JsonElement p, string op, bool allowAll = true)
     {
         var parts = new List<CivilDb.Part>();
         var names = Has(p, "names") ? StrList(p, "names", 5000).ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
+        if (!allowAll && names == null && !Has(p, "handles"))
+            throw new ArgumentException($"{op}: give 'names' or 'handles'. A swap of every pipe AND structure of '{net.Name}' to one part is not done by default.");
         if (Has(p, "handles"))
+        {
+            var own = new HashSet<ObjectId>(net.GetPipeIds().Cast<ObjectId>().Concat(net.GetStructureIds().Cast<ObjectId>()));
             foreach (var h in StrList(p, "handles", 5000))
-                parts.Add(c.Tr.GetObject(IdFromHandle(c.Db, h), OpenMode.ForWrite) as CivilDb.Part ?? throw new ArgumentException($"{op}: {h} is not a network part."));
+            {
+                var id = IdFromHandle(c.Db, h);
+                if (!own.Contains(id)) throw new ArgumentException($"{op}: {h} is not a part of network '{net.Name}'.");
+                parts.Add((CivilDb.Part)c.Tr.GetObject(id, OpenMode.ForWrite));
+            }
+        }
         else
             foreach (ObjectId id in net.GetPipeIds().Cast<ObjectId>().Concat(net.GetStructureIds().Cast<ObjectId>()))
             {
@@ -318,7 +327,7 @@ internal static class ExtraOps
     {
         var net = FindPipeNetwork(c.Civ, c.Tr, NeedStr(p, "network"), OpenMode.ForWrite);
         var picker = new GravityParts.Picker(c.Tr, GravityParts.ListFor(c.Civ, c.Db, c.Tr, net, StrParam(p, "parts_list")));
-        var parts = GravityParts_(c, net, p, "part_swap");
+        var parts = GravityParts_(c, net, p, "part_swap", allowAll: false);
         if (parts.Count == 0) throw new ArgumentException("part_swap: no parts matched 'names' / 'handles'.");
         var done = new List<object>();
         foreach (var part in parts)
@@ -388,6 +397,46 @@ internal static class ExtraOps
     // ---------------------------------------------------------------- section view tables
 
     /// <summary>A total-volume or material table on every section view of a sample line group, for one material list.</summary>
+    /// <summary>
+    /// Close objects that Civil 3D left open for write after the transaction ended (see section_volume_tables). An object
+    /// that cannot be released is reported, because the drawing cannot be saved while it stays open.
+    /// </summary>
+    internal static void ReleaseStrayOpens(EditContext c, IEnumerable<ObjectId> ids, string what)
+    {
+        var db = c.Db;
+        bool Readable(ObjectId id)
+        {
+            try
+            {
+                using var t = db.TransactionManager.StartOpenCloseTransaction();
+                t.GetObject(id, OpenMode.ForRead, true);
+                t.Commit();
+                return true;
+            }
+            catch (Autodesk.AutoCAD.Runtime.Exception ex) when (ex.ErrorStatus == Autodesk.AutoCAD.Runtime.ErrorStatus.WasOpenForWrite) { return false; }
+            catch { return true; }   // erased by a rollback, or otherwise not open for write: nothing to release
+        }
+        foreach (var id in ids)
+        {
+            if (id.IsNull || Readable(id)) continue;
+            for (int attempt = 0; attempt < 3 && !Readable(id); attempt++)
+            {
+                try
+                {
+#pragma warning disable 618   // ObjectId.Open: the stray open is not ours, so a transaction cannot reach it
+                    var o = id.Open(OpenMode.ForNotify, true);
+#pragma warning restore 618
+                    try { o.DowngradeOpen(); } catch { /* reports eWasOpenForWrite yet releases the stray write open */ }
+                    o.Close();
+                }
+                catch (Exception ex) { c.Warnings.Add($"{what} {H(id)}: release attempt failed: {ex.Message}"); }
+            }
+            if (!Readable(id))
+                c.Warnings.Add($"{what} {H(id)} is still open for write in Civil 3D: the drawing cannot be saved until Civil 3D is " +
+                               "restarted (close it without saving). Run diagnose_save to check.");
+        }
+    }
+
     private static object SectionVolumeTables(EditContext c, JsonElement p)
     {
         var al = FindAlignment(c.Civ, c.Tr, NeedStr(p, "alignment"));
@@ -399,6 +448,7 @@ internal static class ExtraOps
         if (list == null) throw new ArgumentException($"Material list '{listName}' not found on '{g.Name}' (material_list_create).");
         var type = Choice(p, "type", "total", "total", "material") == "material" ? CivilDb.VolumeTableType.Material : CivilDb.VolumeTableType.TotalVolume;
         var tables = new List<string>();
+        var made = new List<ObjectId>();
         int views = 0;
         foreach (var sl in AlignmentRead.SampleLines(c.Tr, g))
             foreach (ObjectId vid in sl.GetSectionViewIds())
@@ -408,9 +458,20 @@ internal static class ExtraOps
                 var vt = sv.VolumeTables;
                 if (DblParam(p, "offset_x") is double ox) vt.OffsetX = ox;
                 if (DblParam(p, "offset_y") is double oy) vt.OffsetY = oy;
-                try { tables.Add(H(vt.CreateVolumeTable(type, list.Guid))); }
+                try
+                {
+                    var id = vt.CreateVolumeTable(type, list.Guid);
+                    made.Add(id);
+                    tables.Add(H(id));
+                }
                 catch (Exception ex) { c.Warn($"section view {sv.Name}: {ex.Message}"); }
             }
+        // Civil 3D 2027 leaves every table made by CreateVolumeTable open for write once the transaction ends (committed
+        // or rolled back), and a drawing with an object open for write cannot be saved ("object cannot be saved ... no file
+        // was created") and may crash on close. Live test 2026-11-25: opening such a table for notify, asking for
+        // DowngradeOpen (which reports eWasOpenForWrite but releases the stray write open) and closing it leaves the table
+        // readable and the drawing savable. Done after the transaction, on every path.
+        if (made.Count > 0) c.AfterEnd.Add(() => ReleaseStrayOpens(c, made, "volume table"));
         if (views == 0) throw new ArgumentException($"section_volume_tables: '{g.Name}' has no section views (section_views_create).");
         return new { alignment = al.Name, group = g.Name, materialList = list.Name, type = type.ToString(), sectionViews = views, tables = tables.Count,
                      note = "Civil 3D fills the tables when it has computed the material sections." };

@@ -103,13 +103,29 @@ internal static class StyleOps
         if (pipeLayer is ObjectId pid) net.PipePlanLayerId = pid;
         if (structureLayer is ObjectId sid) net.StructurePlanLayerId = sid;
 
+        // A part that already has a plan label gets its label(s) restyled instead of a second label.
+        var pipeLabels = pipeLabel != null ? c.LabelsByPart<CivilDb.PipeLabel>() : new();
+        var structureLabels = structureLabel != null ? c.LabelsByPart<CivilDb.StructureLabel>() : new();
+        int restyled = 0;
+        void Restyle(List<ObjectId> existing, ObjectId style)
+        {
+            foreach (var lid in existing)
+            {
+                var label = (CivilDb.Label)c.Tr.GetObject(lid, OpenMode.ForWrite);
+                label.StyleId = style;
+                if (labelLayer is ObjectId lab) label.LayerId = lab;
+                restyled++;
+            }
+        }
+
         int pipes = 0, structures = 0, labels = 0;
         foreach (ObjectId id in net.GetPipeIds())
         {
             var pipe = (CivilDb.Pipe)c.Tr.GetObject(id, OpenMode.ForWrite);
             if (pipeStyle is ObjectId ps) pipe.StyleId = ps;
             if (pipeLayer is ObjectId lay) pipe.LayerId = lay;
-            if (pipeLabel is ObjectId ls)
+            if (pipeLabel is ObjectId rs && pipeLabels.TryGetValue(id, out var had)) Restyle(had, rs);
+            else if (pipeLabel is ObjectId ls)
             {
                 var label = (Entity)c.Tr.GetObject(CivilDb.PipeLabel.Create(id, 0.5, ls), OpenMode.ForWrite);
                 if (labelLayer is ObjectId lab) label.LayerId = lab;
@@ -123,7 +139,8 @@ internal static class StyleOps
             var st = (CivilDb.Structure)c.Tr.GetObject(id, OpenMode.ForWrite);
             if (structureStyle is ObjectId ss) st.StyleId = ss;
             if (structureLayer is ObjectId lay) st.LayerId = lay;
-            if (structureLabel is ObjectId ls)
+            if (structureLabel is ObjectId rs && structureLabels.TryGetValue(id, out var had)) Restyle(had, rs);
+            else if (structureLabel is ObjectId ls)
             {
                 var label = (Entity)c.Tr.GetObject(CivilDb.StructureLabel.Create(id, ls, st.Location + labelOffset), OpenMode.ForWrite);
                 if (labelLayer is ObjectId lab) label.LayerId = lab;
@@ -131,7 +148,7 @@ internal static class StyleOps
             }
             structures++;
         }
-        return new { network = net.Name, pipes, structures, labelsAdded = labels };
+        return new { network = net.Name, pipes, structures, labelsAdded = labels, labelsRestyled = restyled };
     }
 
     // ---------------------------------------------------------------- alignments

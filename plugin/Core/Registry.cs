@@ -89,6 +89,7 @@ internal static class Registry
         Read("list_styles", StyleRead.ListStyles);
         Read("get_style", StyleRead.GetStyle);
         Read("describe_api", ApiRead.DescribeApi);
+        Read("diagnose_save", SaveCheck.DiagnoseSave);
         Read("get_edit_permission", _ => WriteGate.Status());
         Read("get_edit_status", EditRequests.Status);
         Read("list_actions", ListActions);

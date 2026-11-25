@@ -18,6 +18,7 @@ internal static class BridgeServer
     // How long a request may WAIT for Civil 3D's main thread (busy with a command, dialog or regen). Once a handler
     // has started it is never abandoned, so this is not a limit on how long an edit or the permission dialog may take.
     private static readonly TimeSpan QueueTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan PingWait = TimeSpan.FromSeconds(2);
     private const int MaxRequestChars = 4 * 1024 * 1024;                       // 4 MB per request line (large edit batches)
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(30);   // a started request line must finish in 30 s
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(10);   // idle connections are dropped
@@ -71,14 +72,19 @@ internal static class BridgeServer
     public static void WriteBridgeFile()
     {
         if (_listener == null) return;
-        Directory.CreateDirectory(BridgeInfo.DataFolder);
-        File.WriteAllText(BridgeFile, ConnectionJson());
+        WriteAtomically(BridgeFile, ConnectionJson());
     }
 
-    private static void WriteInstanceFile()
+    private static void WriteInstanceFile() => WriteAtomically(InstanceFile(Environment.ProcessId), ConnectionJson());
+
+    /// <summary>The MCP server reads bridge.json on every call: never let it see a half-written file.</summary>
+    private static void WriteAtomically(string file, string text)
     {
         Directory.CreateDirectory(BridgeInfo.DataFolder);
-        File.WriteAllText(InstanceFile(Environment.ProcessId), ConnectionJson());
+        string temp = file + "." + Environment.ProcessId + ".tmp";
+        File.WriteAllText(temp, text);
+        if (File.Exists(file)) File.Replace(temp, file, null);
+        else File.Move(temp, file);
     }
 
     private static bool Alive(int pid)
@@ -148,7 +154,7 @@ internal static class BridgeServer
                 File.Delete(BridgeFile);
                 // hand the target to another running instance, if there is one
                 foreach (var f in Directory.GetFiles(BridgeInfo.DataFolder, "bridge-*.json"))
-                    if (ReadInfo(f) is { } info && Alive(info.pid)) { File.Copy(f, BridgeFile, true); break; }
+                    if (ReadInfo(f) is { } info && Alive(info.pid)) { WriteAtomically(BridgeFile, File.ReadAllText(f)); break; }
             }
         }
         catch { /* best effort */ }
@@ -281,6 +287,14 @@ internal static class BridgeServer
                 var result = await EditRequests.RunAsync(requestId, target, args, () =>
                     MainThread.RunAsync(() => action.Run(args), QueueTimeout));
                 return Success(reqId, result);
+            }
+
+            if (method == "ping" && !Has(args, "target"))
+            {
+                // A connection check must answer even while Civil 3D's main thread is held (the MCP permission
+                // dialog, a command, a long regen): after a short wait, answer with what is known off that thread.
+                try { return Success(reqId, await MainThread.RunAsync(() => action.Run(args), PingWait)); }
+                catch (TimeoutException) { return Success(reqId, DrawingRead.PingBusy()); }
             }
 
             var readTarget = Has(args, "target") ? DrawingTarget.Read(args) : (DrawingTarget?)null;

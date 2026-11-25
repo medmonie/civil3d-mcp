@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -68,16 +69,21 @@ def call(method: str, params: dict[str, Any] | None = None, timeout: float = REA
         params["request_id"] = edit_request_id(params)
 
     path = bridge_file()
-    try:
-        info = json.loads(path.read_text(encoding="utf-8"))
-        port, token = int(info["port"]), str(info["token"])
-    except FileNotFoundError:
-        raise BridgeError(
-            "Civil 3D is not reachable. Start Civil 3D (2024, 2025 or 2027) with the C3dMcpBridge plugin "
-            "(type MCPSTATUS in Civil 3D to confirm it is loaded), then try again."
-        ) from None
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise BridgeError(f"Cannot read the bridge file {path}: {exc}") from None
+    for attempt in range(3):
+        try:
+            info = json.loads(path.read_text(encoding="utf-8"))
+            port, token = int(info["port"]), str(info["token"])
+            break
+        except FileNotFoundError:
+            raise BridgeError(
+                "Civil 3D is not reachable. Start Civil 3D (2024, 2025 or 2027) with the C3dMcpBridge plugin "
+                "(type MCPSTATUS in Civil 3D to confirm it is loaded), then try again."
+            ) from None
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            # The plugin may be rewriting the file (MCPSTATUS, start-up, hand-over on exit): retry briefly.
+            if attempt == 2:
+                raise BridgeError(f"Cannot read the bridge file {path}: {exc}") from None
+            time.sleep(0.1)
 
     if target is not None:
         if "session_id" not in info:

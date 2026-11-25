@@ -28,6 +28,7 @@ internal static class CorridorOps
         var assembly = (CivilDb.Assembly)c.Tr.GetObject(assemblyId, OpenMode.ForWrite);
         var added = new List<object>();
         var specs = ArrParam(p, "subassemblies", 50);
+        var lastOnSide = new Dictionary<CivilDb.SubassemblySideType, ObjectId>();
         for (int i = 0; i < specs.Count; i++)
         {
             // Stock subassemblies are addressed by their .NET class, e.g. Subassembly.BasicLane.
@@ -47,8 +48,29 @@ internal static class CorridorOps
                 var side = EnumParam(specs[i], "side", CivilDb.SubassemblySideType.Right);
                 try { sub.Side = side; } catch (Exception ex) { c.Warn($"subassembly {i + 1}: side could not be set: {ex.Message}"); }
             }
-            assembly.AddSubassembly(subId);
-            added.Add(new { name = subName, @class = cls, side = Safe(() => sub.Side.ToString()) });
+            // Chain on each side, as when built by hand: a subassembly is attached to the outermost point of the
+            // previous subassembly on the same side (a shoulder at the lane edge), not to the assembly baseline.
+            string? attachedTo = null;
+            var sideNow = Safe(() => sub.Side);
+            if (sideNow is CivilDb.SubassemblySideType s0 && lastOnSide.TryGetValue(s0, out var prevId))
+            {
+                try
+                {
+                    var prev = (CivilDb.Subassembly)c.Tr.GetObject(prevId, OpenMode.ForRead);
+                    double Out(CivilDb.Point pt) => s0 == CivilDb.SubassemblySideType.Left ? -pt.Offset : pt.Offset;
+                    var hook = prev.Points.Cast<CivilDb.Point>().OrderByDescending(Out).ThenByDescending(pt => pt.Elevation).First();   // outer, top edge
+                    assembly.AddSubassembly(subId, hook);
+                    attachedTo = $"{prev.Name} (point {Safe(() => string.Join("/", hook.Codes))})";
+                }
+                catch (Exception ex)
+                {
+                    c.Warn($"subassembly {i + 1}: could not be attached to the previous one on the {s0} side ({ex.Message}); it starts at the baseline.");
+                    attachedTo = null;
+                }
+            }
+            if (attachedTo == null) assembly.AddSubassembly(subId);
+            if (sideNow is CivilDb.SubassemblySideType s1 && (s1 == CivilDb.SubassemblySideType.Left || s1 == CivilDb.SubassemblySideType.Right)) lastOnSide[s1] = subId;
+            added.Add(new { name = subName, @class = cls, side = Safe(() => sub.Side.ToString()), attachedTo = attachedTo ?? "baseline" });
         }
         return new { assembly = name, handle = H(assemblyId), type = type.ToString(), subassemblies = added };
     }

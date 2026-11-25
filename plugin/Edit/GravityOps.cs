@@ -265,11 +265,21 @@ internal static class GravityOps
     private static object LabelsAdd(EditContext c, JsonElement p)
     {
         var net = FindPipeNetwork(c.Civ, c.Tr, NeedStr(p, "pipe_network"));
-        int pipes = 0, structures = 0;
+        int pipes = 0, structures = 0, skipped = 0;
+        // A part that already has a plan label is skipped, so running this again does not stack a second label.
         if (BoolParam(p, "pipes") ?? true)
-            foreach (ObjectId id in net.GetPipeIds()) { CivilDb.PipeLabel.Create(id, 0.5); pipes++; }
+        {
+            var labelled = c.LabelsByPart<CivilDb.PipeLabel>();
+            foreach (ObjectId id in net.GetPipeIds())
+                if (labelled.ContainsKey(id)) skipped++; else { CivilDb.PipeLabel.Create(id, 0.5); pipes++; }
+        }
         if (BoolParam(p, "structures") ?? true)
-            foreach (ObjectId id in net.GetStructureIds()) { CivilDb.StructureLabel.Create(id); structures++; }
-        return new { network = net.Name, pipeLabels = pipes, structureLabels = structures, note = "Labels use the drawing's default label styles." };
+        {
+            var labelled = c.LabelsByPart<CivilDb.StructureLabel>();
+            foreach (ObjectId id in net.GetStructureIds())
+                if (labelled.ContainsKey(id)) skipped++; else { CivilDb.StructureLabel.Create(id); structures++; }
+        }
+        return new { network = net.Name, pipeLabels = pipes, structureLabels = structures, alreadyLabelled = skipped,
+                     note = "Labels use the drawing's default label styles. Parts that already had a plan label were skipped." };
     }
 }

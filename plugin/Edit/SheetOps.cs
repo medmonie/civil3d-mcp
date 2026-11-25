@@ -274,7 +274,7 @@ internal static class SheetOps
     private static object LayoutFromTemplate(EditContext c, JsonElement p)
     {
         const string op = "layout_from_template";
-        string path = Path.GetFullPath(NeedStr(p, "path"));
+        string path = NeedFullPath(p, "path", op);
         string? source = StrParam(p, "layout");
         var lm = LayoutManager.Current;
 

@@ -35,7 +35,21 @@ internal static class EditEngine
 
     public static List<string> OperationNames => Ops.Keys.OrderBy(k => k).ToList();
 
+    // Main thread only. The permission dialog (and plotting) runs a nested message loop that can pump the bridge's
+    // posted work, so a second edit could otherwise start inside the first one's dialog or transaction.
+    private static bool _running;
+
     public static object Run(JsonElement p)
+    {
+        if (_running)
+            throw new InvalidOperationException("Another MCP edit is still running in Civil 3D (or waiting for the permission dialog). " +
+                                                "Nothing was changed; send this edit again with the same request_id when it finishes.");
+        _running = true;
+        try { return RunExclusive(p); }
+        finally { _running = false; }
+    }
+
+    private static object RunExclusive(JsonElement p)
     {
         var ops = NeedArr(p, "operations", MaxOperations);
         bool dryRun = BoolParam(p, "dry_run") ?? false;
@@ -59,38 +73,47 @@ internal static class EditEngine
         // 3. Run every operation in one transaction; the first failure rolls everything back.
         var results = new List<object>();
         EditContext ctx;
+        object? failed = null;
         using (doc.LockDocument())
         {
             target.RequireActive();
-            using var tr = doc.Database.TransactionManager.StartTransaction();
-            ctx = new EditContext { Doc = doc, Tr = tr };
-            for (int i = 0; i < ops.Count; i++)
+            using (var tr = doc.Database.TransactionManager.StartTransaction())
             {
-                ctx.OpIndex = i + 1;
-                try
+                ctx = new EditContext { Doc = doc, Tr = tr };
+                for (int i = 0; i < ops.Count; i++)
                 {
-                    results.Add(new { index = i + 1, op = names[i], result = Ops[names[i]](ctx, ops[i]) });
-                }
-                catch (Exception ex)
-                {
-                    tr.Abort();
-                    string error = ErrorText(ex);
-                    Audit.Write("edit_failed", new { requestId, drawing = doc.Name, dryRun, summary, failedAt = i + 1, op = names[i], error });
-                    return new
+                    ctx.OpIndex = i + 1;
+                    try
                     {
-                        applied = false, dryRun, failedAt = i + 1, op = names[i], error,
-                        note = "Nothing was changed: the whole batch was rolled back.",
-                        completedBeforeFailure = results, warnings = ctx.Warnings,
-                    };
+                        results.Add(new { index = i + 1, op = names[i], result = Ops[names[i]](ctx, ops[i]) });
+                    }
+                    catch (Exception ex)
+                    {
+                        tr.Abort();
+                        string error = ErrorText(ex);
+                        Audit.Write("edit_failed", new { requestId, drawing = doc.Name, dryRun, summary, failedAt = i + 1, op = names[i], error });
+                        failed = new
+                        {
+                            applied = false, dryRun, failedAt = i + 1, op = names[i], error,
+                            note = "Nothing was changed: the whole batch was rolled back.",
+                            completedBeforeFailure = results, warnings = ctx.Warnings,
+                        };
+                        break;
+                    }
+                }
+                if (failed == null)
+                {
+                    if (dryRun) tr.Abort();
+                    else
+                    {
+                        tr.TransactionManager.QueueForGraphicsFlush();
+                        tr.Commit();
+                    }
                 }
             }
-            if (dryRun) tr.Abort();
-            else
-            {
-                tr.TransactionManager.QueueForGraphicsFlush();
-                tr.Commit();
-            }
+            RunAfterEnd(ctx);
         }
+        if (failed != null) return failed;
 
         // 4. Saving and plotting cannot run inside the transaction; they follow the commit.
         bool afterCommitSucceeded = dryRun || RunAfterCommit(doc, target, ctx);
@@ -117,6 +140,16 @@ internal static class EditEngine
             names.Add(name);
         }
         return names;
+    }
+
+    /// <summary>Clean-up that follows the transaction on every path (see EditContext.AfterEnd); never throws.</summary>
+    private static void RunAfterEnd(EditContext ctx)
+    {
+        foreach (var work in ctx.AfterEnd)
+        {
+            try { work(); }
+            catch (Exception ex) { ctx.Warnings.Add($"clean-up after the edit FAILED: {ex.GetType().Name}: {ex.Message}"); }
+        }
     }
 
     private static bool RunAfterCommit(Document doc, DrawingTarget target, EditContext ctx)

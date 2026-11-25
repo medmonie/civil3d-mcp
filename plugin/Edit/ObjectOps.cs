@@ -120,14 +120,19 @@ internal static class ObjectOps
     {
         var ents = c.OpenEntities(p, plainOnlyFor: "entity_copy");
         var m = Matrix3d.Displacement(Displacement(p));
-        var ms = ModelSpace(c.Db, c.Tr, OpenMode.ForWrite);
+        // DeepCloneObjects, not Entity.Clone(): Clone() leaves out owned sub-objects (a block reference's attributes, the
+        // vertices of 2D/3D polylines) and the copy went to model space even when the original was on a layout.
         var handles = new List<string>();
-        foreach (var e in ents)
+        foreach (var group in ents.GroupBy(e => e.OwnerId))
         {
-            var copy = (Entity)e.Clone();
-            copy.TransformBy(m);
-            handles.Add(H(ms.AppendEntity(copy)));
-            c.Tr.AddNewlyCreatedDBObject(copy, true);
+            var map = new IdMapping();
+            c.Db.DeepCloneObjects(new ObjectIdCollection(group.Select(e => e.ObjectId).ToArray()), group.Key, map, false);
+            foreach (var e in group)
+            {
+                var copy = (Entity)c.Tr.GetObject(map[e.ObjectId].Value, OpenMode.ForWrite);
+                copy.TransformBy(m);
+                handles.Add(H(copy.ObjectId));
+            }
         }
         return new { copied = handles.Count, handles };
     }
