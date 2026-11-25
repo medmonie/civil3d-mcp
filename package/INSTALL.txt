@@ -6,9 +6,13 @@ The package includes the MCP server. Python and the .NET SDK are only needed to 
 1. Close Civil 3D.
 2. Double-click install.bat. It installs the Civil 3D plug-in and prints the MCP server's full path.
    Do not use "Run as administrator": it installs per user, for the account signed in to this desktop.
-3. Connect your MCP client to the printed server path:
-   - Claude Desktop: Settings > Developer > Edit Config, add the block from claude_desktop_config_snippet.json
-     (saved next to the server), then fully quit and restart Claude.
+   It also adds the civil3d server to Claude Desktop (classic and Microsoft Store installs) and Codex when they are
+   installed for you, keeping your other servers and backing each file up first. It lists what it changed.
+3. Restart Claude Desktop / Codex fully (quit from the tray). If install.bat listed a client as NOT CHANGED or not
+   found, connect it by hand to the printed server path:
+   - Claude Desktop: Settings > Developer > Edit Config. Merge the "civil3d" entry from
+     claude_desktop_config_snippet.json (saved next to the server) into the existing "mcpServers" block - do not
+     paste a second "mcpServers" block - then fully quit and restart Claude.
    - ChatGPT desktop: Settings > MCP servers > Add server. Name it civil3d, choose STDIO, command = the server
      path, no arguments. If civil3d already exists, update its command. Save and restart as prompted.
    - Codex: add codex_mcp_config_snippet.toml to ~/.codex/config.toml.

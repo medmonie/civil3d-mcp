@@ -21,6 +21,7 @@ internal static class Registry
         Read("count_entities", DrawingRead.CountEntities);
         Read("get_selection", DrawingRead.GetSelection);
         Read("get_objects", DrawingRead.GetObjects);
+        Read("show_objects", ViewRead.ShowObjects);
         Read("list_entities", DrawingRead.ListEntities);
         Read("list_blocks", DrawingRead.ListBlocks);
         Read("list_layouts", DrawingRead.ListLayouts);

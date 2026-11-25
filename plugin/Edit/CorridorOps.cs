@@ -15,6 +15,29 @@ internal static class CorridorOps
     {
         try { corridor.Rebuild(); }
         catch (Exception ex) { c.Warn($"corridor '{corridor.Name}' did not rebuild: {ex.Message}"); }
+        RebuildCorridorSurfaces(c, corridor);
+    }
+
+    /// <summary>
+    /// A corridor surface's TIN stays empty ("point outside surface") until the surface itself is rebuilt after the
+    /// corridor rebuild has been committed, so each one is rebuilt after the commit.
+    /// </summary>
+    internal static void RebuildCorridorSurfaces(EditContext c, CivilDb.Corridor corridor)
+    {
+        var ids = new List<(ObjectId Id, string Name)>();
+        foreach (CivilDb.CorridorSurface cs in corridor.CorridorSurfaces) ids.Add((cs.SurfaceId, cs.Name));
+        if (ids.Count == 0) return;
+        var db = c.Db;
+        c.AfterCommit.Add(() =>
+        {
+            using var tr = db.TransactionManager.StartTransaction();
+            foreach (var (id, name) in ids)
+            {
+                try { ((CivilDb.TinSurface)tr.GetObject(id, OpenMode.ForWrite)).Rebuild(); }
+                catch (Exception ex) { c.Warn($"corridor surface '{name}' did not rebuild: {ex.Message}"); }
+            }
+            tr.Commit();
+        });
     }
 
     private static object AssemblyCreate(EditContext c, JsonElement p)
@@ -108,6 +131,7 @@ internal static class CorridorOps
         var codes = Has(p, "link_codes") ? StrList(p, "link_codes", 20) : new List<string> { "Top" };
         var surface = corridor.CorridorSurfaces.Add(name);
         foreach (var code in codes) surface.AddLinkCode(code, true);
+        surface.IsBuild = true;   // otherwise Civil 3D keeps the surface empty ("no point or triangle")
         Rebuild(c, corridor);
         return new { corridor = corridor.Name, corridorSurface = name, linkCodes = codes };
     }
@@ -116,6 +140,7 @@ internal static class CorridorOps
     {
         var corridor = FindCorridor(c.Civ, c.Tr, NeedStr(p, "name"), OpenMode.ForWrite);
         corridor.Rebuild();
+        RebuildCorridorSurfaces(c, corridor);
         return new { corridor = corridor.Name, rebuilt = true };
     }
 }

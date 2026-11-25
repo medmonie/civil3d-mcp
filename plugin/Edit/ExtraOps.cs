@@ -24,6 +24,7 @@ internal static class ExtraOps
     {
         try { cor.Rebuild(); }
         catch (Exception ex) { c.Warn($"corridor '{cor.Name}' did not rebuild: {ex.Message}"); }
+        CorridorOps.RebuildCorridorSurfaces(c, cor);
     }
 
     // ---------------------------------------------------------------- profiles

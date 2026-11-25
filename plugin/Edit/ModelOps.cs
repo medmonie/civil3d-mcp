@@ -25,6 +25,7 @@ internal static class ModelOps
     {
         try { cor.Rebuild(); }
         catch (Exception ex) { c.Warn($"corridor '{cor.Name}' did not rebuild: {ex.Message}"); }
+        CorridorOps.RebuildCorridorSurfaces(c, cor);
     }
 
     // ---------------------------------------------------------------- corridor feature lines

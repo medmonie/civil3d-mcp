@@ -85,6 +85,7 @@ class SewerGemsTest(unittest.TestCase):
         request = {"target": target, "request_id": str(uuid4()), "presentation": False}
         registered = {}
         finished = []
+        queued_timeout = set()
 
         def bridge(action, params, **kwargs):
             self.assertEqual(params["target"], target)
@@ -92,6 +93,8 @@ class SewerGemsTest(unittest.TestCase):
                 return {"civilDrawingUnits": "Meters"}
             if action == "get_edit_status":
                 row = registered.get(params["request_id"])
+                if row is None and params["request_id"] in queued_timeout:
+                    return {"state": "error", "retryable": True}
                 return {"state": "completed", "applied": row[1]["applied"], "result": row[1]} if row else {"state": "unknown"}
             if action == "list_profile_views":
                 return {"profileViews": [{"name": "LINE1 - Profile", "handle": "AF", "stationStart": 0,
@@ -110,6 +113,11 @@ class SewerGemsTest(unittest.TestCase):
                 self.assertIn("profile_view_add_parts", names)
                 reply = {"applied": True}
             else:
+                if not queued_timeout:
+                    queued_timeout.add(req_id)
+                    raise sewergems.BridgeError("Timed out before the CAD queue started")
+                if not finished:
+                    self.assertIn(req_id, queued_timeout)
                 finished.append(req_id)
                 reply = {"applied": len(finished) > 1, "request_id": req_id}
             registered[req_id] = params, reply
@@ -121,6 +129,9 @@ class SewerGemsTest(unittest.TestCase):
             result = sewergems.build(request)
             self.assertTrue(result["coreApplied"])
             self.assertFalse(result["built"])
+            self.assertIn("CAD queue", result["error"])
+            self.assertFalse(finished)
+            self.assertFalse(sewergems.build(request)["built"])
             self.assertEqual(len(finished), 1)
             self.assertFalse(sewergems.build(request)["built"])
             self.assertEqual(len(finished), 1)

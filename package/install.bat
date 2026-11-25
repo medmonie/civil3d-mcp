@@ -38,13 +38,16 @@ echo.
 echo Installed. Plugin: %BUNDLE%
 echo Server:  "%C3D_INSTALL_DIR%\c3d-mcp-server.exe"
 echo.
-echo Connect your MCP client to this server (see README.md, Connect your MCP client):
-echo   Claude Desktop: Settings ^> Developer ^> Edit Config, add the block from
-echo                   "%SNIP%"
-echo                   then fully quit and restart Claude.
+echo MCP clients on this PC (the civil3d entry is added or updated; other servers are kept; each file is backed up first):
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0configure_clients.ps1" -Exe "%C3D_INSTALL_DIR%\c3d-mcp-server.exe"
+if errorlevel 1 echo   The MCP clients could not be configured automatically: add the snippets below by hand.
+echo.
+echo   Claude Desktop / Codex: fully quit and restart them to load the server.
+echo   If a client above says NOT CHANGED or not found, add the block by hand:
+echo     Claude Desktop: Settings ^> Developer ^> Edit Config, merge "%SNIP%" into mcpServers
+echo     Codex: add "%C3D_CODEX_SNIP%" to ~/.codex/config.toml
 echo   ChatGPT desktop: Settings ^> MCP servers ^> Add server, name civil3d, STDIO,
 echo                   command = the server path above. Save and restart as prompted.
-echo   Codex: add "%C3D_CODEX_SNIP%" to ~/.codex/config.toml
 echo.
 echo Then open a drawing in Civil 3D 2024, 2025 or 2027 and run MCPSTATUS in the command line.
 pause

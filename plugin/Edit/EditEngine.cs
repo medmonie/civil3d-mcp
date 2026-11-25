@@ -89,6 +89,7 @@ internal static class EditEngine
                     }
                     catch (Exception ex)
                     {
+                        RunBeforeAbort(ctx);
                         tr.Abort();
                         string error = ErrorText(ex);
                         Audit.Write("edit_failed", new { requestId, drawing = doc.Name, dryRun, summary, failedAt = i + 1, op = names[i], error });
@@ -103,7 +104,7 @@ internal static class EditEngine
                 }
                 if (failed == null)
                 {
-                    if (dryRun) tr.Abort();
+                    if (dryRun) { RunBeforeAbort(ctx); tr.Abort(); }
                     else
                     {
                         tr.TransactionManager.QueueForGraphicsFlush();
@@ -140,6 +141,16 @@ internal static class EditEngine
             names.Add(name);
         }
         return names;
+    }
+
+    /// <summary>Undo what an abort does not (see EditContext.BeforeAbort), newest first; never throws.</summary>
+    private static void RunBeforeAbort(EditContext ctx)
+    {
+        for (int i = ctx.BeforeAbort.Count - 1; i >= 0; i--)
+        {
+            try { ctx.BeforeAbort[i](); }
+            catch (Exception ex) { ctx.Warn($"could not put a changed object back before the rollback ({ex.Message}); check it, or UNDO in Civil 3D."); }
+        }
     }
 
     /// <summary>Clean-up that follows the transaction on every path (see EditContext.AfterEnd); never throws.</summary>

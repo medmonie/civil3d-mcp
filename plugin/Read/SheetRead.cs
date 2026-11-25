@@ -194,7 +194,17 @@ internal static class SheetRead
     public static object InspectFile(JsonElement p)
     {
         string path = NeedFullPath(p, "path", "inspect_file");
-        int limit = IntParam(p, "limit", 60, 1, 2000);
+        // 'limit' is one budget for the whole reply: layout entities, blocks, views and page setups together.
+        int limit = IntParam(p, "limit", 60, 1, 2000), budget = limit;
+        string? onlyLayout = StrParam(p, "layout");
+        var truncated = new List<string>();
+        List<T> Take<T>(IEnumerable<T> items, int total, string what)
+        {
+            var list = items.Take(Math.Max(0, budget)).ToList();
+            budget -= list.Count;
+            if (list.Count < total) truncated.Add($"{what}: {list.Count} of {total}");
+            return list;
+        }
         using var side = BlockOps.ReadSide(path, "inspect_file");
         using var tr = side.TransactionManager.StartTransaction();
         object Ent(Entity e) => new
@@ -207,8 +217,12 @@ internal static class SheetRead
         };
 
         var layouts = new List<object>();
-        foreach (var l in PaperLayouts(side, tr))
+        var allLayouts = PaperLayouts(side, tr).ToList();
+        if (onlyLayout != null && !allLayouts.Any(l => l.LayoutName.Equals(onlyLayout, StringComparison.OrdinalIgnoreCase)))
+            throw new ArgumentException($"inspect_file: no layout '{onlyLayout}' in the file. Layouts: {string.Join(", ", allLayouts.Select(l => l.LayoutName))}");
+        foreach (var l in allLayouts)
         {
+            if (onlyLayout != null && !l.LayoutName.Equals(onlyLayout, StringComparison.OrdinalIgnoreCase)) continue;
             var space = (BlockTableRecord)tr.GetObject(l.BlockTableRecordId, OpenMode.ForRead);
             var ents = space.Cast<ObjectId>().Select(id => tr.GetObject(id, OpenMode.ForRead) as Entity).Where(e => e != null).Cast<Entity>().ToList();
             var vps = ents.OfType<Viewport>().ToList();
@@ -227,7 +241,7 @@ internal static class SheetRead
                     clipped = vp.NonRectClipOn,
                     frozenLayers = Safe(() => vp.GetFrozenLayers().Cast<ObjectId>().Select(x => ((LayerTableRecord)tr.GetObject(x, OpenMode.ForRead)).Name).ToList()),
                 }).ToList(),
-                entities = ents.Where(e => e is not Viewport).Take(limit).Select(Ent).ToList(),
+                entities = Take(ents.Where(e => e is not Viewport), ents.Count(e => e is not Viewport), $"layout '{l.LayoutName}' entities").Select(Ent).ToList(),
                 entityCount = ents.Count,
             });
         }
@@ -254,8 +268,12 @@ internal static class SheetRead
         tr.Commit();
         return new
         {
-            path, units = side.Insunits.ToString(), layouts, xrefs, blocks = blocks.Take(300).ToList(), views, pageSetups,
+            path, units = side.Insunits.ToString(), limit, layouts, xrefs,
+            blocks = Take(blocks, blocks.Count, "blocks"), views = Take(views, views.Count, "views"),
+            pageSetups = Take(pageSetups, pageSetups.Count, "page setups"),
             modelSpace = new { count = model.Count, byType },
+            truncated = truncated.Count > 0 ? truncated : null,
+            note = truncated.Count > 0 ? "limit is shared by layout entities, blocks, views and page setups; raise it or pass layout to see more." : null,
         };
     }
 }

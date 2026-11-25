@@ -795,3 +795,44 @@ Modified
     one (labelsRestyled in the reply).
 Test
   - run_fixes.bat: counts unchanged on the second run; 3 skipped / restyled.
+
+==============================================================================
+43-48  ChatGPT protocol audit (docs/MCP_PROTOCOL_AUDIT.log), merged into 0.21.0
+==============================================================================
+Reviewed ChatGPT's patched copy file by file against the 0.21.0 working copy
+(its copy predates nothing of ours: show_objects, profile view labels, the
+corridor TIN rebuild and the installer changes were all present). Taken as is:
+43  EditRequests.cs / MainThread.cs (H1): no eviction, refuse at 8,192 IDs;
+    Retryable only for CadQueueTimeoutException (work never started).
+44  server.py (H3): _write_result returns CallToolResult(isError) with the
+    receipt for failed edits / imports / sheets; StrictBool dry_run.
+45  server.py + bridge_client.py (H2): request_cancelled ContextVar; no new
+    bridge request after cancellation.
+46  bridge_client.py + BridgeServer.cs (M7): size limits, descriptor and reply
+    validation, 5 s idle timeout, no dispatch of a partial frame at EOF.
+47  qa.py (M4) one target for every list; sheets.py (M5) 8 stage attempts;
+    sewergems.py finish retries only when retryable.
+48  requirements.txt (L1); openWorldHint true (M9).
+Already covered by us: H8 (configure_clients.ps1 keeps args/env).
+Still open: H5 (PVI edit drops vertical curves - next), H4, H6, H7, M1, M2,
+M3, M6, M8, M10, L2, L3.
+Checks: smoke/sheets/sewergems/watergems tests OK, ledger audit OK,
+typecheck 2027/2025 0 errors (2024: known SwapPartSize only).
+
+==============================================================================
+49-51  0.22.0 (review by a second MCP author + ChatGPT audit H5)
+==============================================================================
+49  GeometryRead.cs: alignment directions computed from coordinates
+    (bearing clockwise from north, angleFromEast, quadrantBearing; arc
+    start/end bearings; spiral 'turn'). The old note said CCW from east.
+50  SheetRead.cs: inspect_file 'limit' is one budget for the whole reply,
+    'truncated' list, 'layout' filter (a template returned 138 KB).
+51  AlignmentOps.cs (H5): elevation-only PVI change sets ProfilePVI.Elevation
+    in place (curve kept, curvesKept); an explicit curve that fails throws
+    so the batch rolls back; CurveGiven separates "omitted" from "none".
+52  EditContext.BeforeAbort + EditEngine: Civil 3D does not undo PVI changes
+    on Transaction.Abort (a failed curve left the PVI removed). The profile
+    is snapshotted and restored by difference (first/last PVIs cannot be
+    removed) before every abort, failed batch or dry run.
+Test: tests/v022_live.py (run_v022.bat): 38/38 PASS on Civil 3D 2027;
+tests/live_protocol_test.py: PASS on the same build.

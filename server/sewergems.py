@@ -696,7 +696,8 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
             if previous["state"] != "completed" or previous.get("applied") is not False:
                 raise ValueError("A new finish attempt requires a confirmed rollback of the preceding finish attempt.")
         status = call("get_edit_status", {"request_id": finish_id, "target": target})
-        if status["state"] != "unknown":
+        retryable = status["state"] == "error" and status.get("retryable") is True
+        if status["state"] != "unknown" and not retryable:
             finish = {**finish, **(status.get("result") or status)}
         else:
             views = {v["name"]: v for v in call("list_profile_views", {"target": target})["profileViews"]}

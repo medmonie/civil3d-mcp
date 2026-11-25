@@ -31,6 +31,7 @@ from bridge_client import BridgeError, EDIT_TIMEOUT, call, drawing_target, edit_
 
 STANDARD_SCALES = [100, 200, 250, 300, 400, 500, 600, 750, 1000, 1250, 1500, 2000, 2500, 3000, 4000, 5000, 7500, 10000]
 MAX_OPS = 500
+MAX_STAGE_ATTEMPTS = 8
 
 
 # --------------------------------------------------------------------------- the template
@@ -354,7 +355,7 @@ def _sheet_content(t, s, target, unit_mm, notes_out):
 def _stage(target, stage_id, workflow, operations):
     # A lost reply or restarted MCP client can resume against the bridge's session ledger.
     # Only a confirmed, unapplied transaction gets a fresh attempt ID on a subsequent call.
-    while True:
+    for _ in range(MAX_STAGE_ATTEMPTS):
         identity = {"target": target, "request_id": str(stage_id)}
         status = call("get_edit_status", identity)
         state = status["state"]
@@ -365,12 +366,16 @@ def _stage(target, stage_id, workflow, operations):
         if state == "pending":
             raise ValueError("The previous edit is still pending. Resume with the same request_id.")
         if state == "error":
-            break
+            if status.get("retryable") is True:
+                break
+            raise ValueError("The previous edit failed with an uncertain outcome. Check the drawing and edit status before continuing.")
         if state != "completed" or status.get("applied") is None:
             raise ValueError("The previous edit outcome is unknown. Check the drawing before continuing.")
         if status["applied"]:
             return status.get("result") or {"applied": True, "afterCommitSucceeded": status.get("afterCommitSucceeded")}
         stage_id = uuid5(stage_id, "retry")
+    else:
+        raise ValueError("The sheet stage reached its retry limit. Inspect the drawing and resolve the failure before starting a new request.")
     ops = operations()
     if not 0 < len(ops) <= MAX_OPS:
         raise ValueError(f"Sheet transaction has {len(ops)} operations (limit {MAX_OPS}).")

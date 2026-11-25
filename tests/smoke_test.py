@@ -18,8 +18,10 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from threading import Event
 from uuid import uuid4
 
+import anyio
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -27,6 +29,81 @@ ROOT = Path(__file__).resolve().parent.parent
 SERVER = ROOT / "server" / "server.py"
 sys.path.insert(0, str(ROOT / "server"))
 import catalog  # noqa: E402
+
+
+async def stdio_lifecycle() -> None:
+    """Exercise actual stdout frames independently of the SDK client wrapper."""
+    process = await asyncio.create_subprocess_exec(sys.executable, "-B", str(SERVER),
+                                                  stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                                                  stderr=asyncio.subprocess.DEVNULL)
+    assert process.stdin is not None and process.stdout is not None
+
+    async def send(method, request_id=None, params=None):
+        message = {"jsonrpc": "2.0", "method": method}
+        if request_id is not None:
+            message["id"] = request_id
+        if params is not None:
+            message["params"] = params
+        process.stdin.write((json.dumps(message) + "\n").encode("utf-8"))
+        await process.stdin.drain()
+        if request_id is not None:
+            raw = await asyncio.wait_for(process.stdout.readline(), 10)
+            response = json.loads(raw)
+            assert response["jsonrpc"] == "2.0" and response["id"] == request_id, response
+            return response
+
+    try:
+        init = await send("initialize", "start", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                                   "clientInfo": {"name": "audit", "version": "1"}})
+        assert init["result"]["protocolVersion"] == "2025-06-18", init
+        assert "tools" in init["result"]["capabilities"], init
+        await send("notifications/initialized")
+        assert (await send("ping", 7))["result"] == {}
+        assert {tool["name"] for tool in (await send("tools/list", "tools"))["result"]["tools"]} == {"civil3d"}
+    finally:
+        process.stdin.close()
+        try:
+            await asyncio.wait_for(process.wait(), 10)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            raise
+    assert process.returncode == 0
+    print("MCP lifecycle and stdout framing verified using raw JSON-RPC")
+
+
+async def cancellation_barrier() -> None:
+    import bridge_client
+    from server import _off_loop
+
+    started, release = Event(), Event()
+    errors = []
+    with anyio.CancelScope() as scope:
+        def work():
+            signal = bridge_client.request_cancelled.get()
+            started.set()
+            assert signal is not None and release.wait(5)
+            try:
+                bridge_client.call("ping")
+            except bridge_client.BridgeError as exc:
+                errors.append(str(exc))
+
+        async def cancel_running():
+            try:
+                with anyio.fail_after(5):
+                    while not started.is_set():
+                        await anyio.sleep(0.01)
+                scope.cancel()
+                with anyio.CancelScope(shield=True):
+                    await anyio.sleep(0.05)
+            finally:
+                release.set()
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(cancel_running)
+            await _off_loop(None, work)
+    assert len(errors) == 1 and "cancelled before" in errors[0], errors
+    print("Cancellation prevented the worker from sending another bridge request")
 
 
 def parse(result):
@@ -74,6 +151,7 @@ async def single_tool(bridge_file: Path) -> None:
             assert layers["nonConforming"] == ["layer1"], layers
             names = await run(session, "check_default_names")
             assert names["totalFlagged"] == 3, names  # Surface1, Alignment - (2), Pipe Network - (1)
+            assert names["target"] == info["target"], names
             print("QA checks ok:", names["defaultNamed"])
 
             h = await run(session, "help")
@@ -111,6 +189,7 @@ async def single_tool(bridge_file: Path) -> None:
 
             await expect_error(session, "edit", {"operations": [{"op": "format_disk"}]}, "unknown edit operation")
             await expect_error(session, "edit", {}, "non-empty list")
+            await expect_error(session, "edit", {**edit_params, "dry_run": "false"}, "true or false")
             await expect_error(session, "layer_create", {"name": "X"}, "is an edit operation")
             await expect_error(session, "no_such_action", {}, "unknown action")
             await expect_error(session, "check_layer_names", {"pattern": "("}, "invalid regular expression")
@@ -124,9 +203,11 @@ async def declined(bridge_file: Path) -> None:
         async with ClientSession(read, write) as session:
             await session.initialize()
             info = await run(session, "get_drawing_info")
-            res = await run(session, "edit", {"operations": [{"op": "layer_create", "name": "C-TEST"}],
-                                               "target": info["target"], "request_id": info["new_edit_request_id"]})
-            assert res["applied"] is False and res["permission"] == "not granted", res
+            res = await session.call_tool("civil3d", {"action": "edit", "params": {
+                "operations": [{"op": "layer_create", "name": "C-TEST"}],
+                "target": info["target"], "request_id": info["new_edit_request_id"]}})
+            assert res.isError and res.structuredContent["applied"] is False, res
+            assert res.structuredContent["permission"] == "not granted", res
             print("declined permission ok: nothing applied")
 
 
@@ -143,6 +224,10 @@ async def split_tools(bridge_file: Path) -> None:
             res = await session.call_tool("civil3d_read", {"action": "edit", "params": {"operations": [{"op": "layer_create", "name": "X"}]}})
             assert res.isError, "the read tool must refuse edits"
             info = parse(await session.call_tool("civil3d_read", {"action": "get_drawing_info"}))
+            invalid = await session.call_tool("civil3d_edit", {"operations": [{"op": "layer_create", "name": "X"}],
+                                                               "target": info["target"], "request_id": info["new_edit_request_id"],
+                                                               "dry_run": "false"})
+            assert invalid.isError, invalid
             ok = parse(await session.call_tool("civil3d_edit", {"operations": [{"op": "layer_create", "name": "X"}],
                                                                "target": info["target"], "request_id": info["new_edit_request_id"]}))
             assert ok["applied"] is True, ok
@@ -185,8 +270,11 @@ def static_checks() -> None:
         assert f"'$(TargetFramework)'=='{tfm}'" in proj and f"<C3dRelease>{release}</C3dRelease>" in proj, f"csproj does not build {release} as {tfm}"
     # every catalogue name must be registered in the plugin sources, and the other way round
     src = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "plugin").rglob("*.cs") if "obj" not in p.parts and "bin" not in p.parts)
-    reads = set(re.findall(r'Read\("([a-z_0-9]+)"', src))
-    ops = set(re.findall(r'ops\["([a-z_0-9]+)"\]', src))
+    read_names = re.findall(r'Read\("([a-z_0-9]+)"', src)
+    op_names = re.findall(r'ops\["([a-z_0-9]+)"\]', src)
+    reads, ops = set(read_names), set(op_names)
+    assert len(read_names) == len(reads), "Duplicate native read registration"
+    assert len(op_names) == len(ops), "Duplicate native edit operation registration"
     assert reads == set(catalog.READ_ACTIONS), (sorted(reads ^ set(catalog.READ_ACTIONS)))
     assert ops == set(catalog.EDIT_OPS), (sorted(ops ^ set(catalog.EDIT_OPS)))
     # the README quotes the version and the number of actions
@@ -220,12 +308,14 @@ def with_fake(coro, **env) -> None:
 
 if __name__ == "__main__":
     static_checks()
+    asyncio.run(stdio_lifecycle())
+    anyio.run(cancellation_barrier)
     with_fake(single_tool)
     with_fake(declined, FAKE_EDIT="decline")
     with_fake(split_tools)
     with_fake(read_only)
     # offline importer tests (each prints its own checks)
-    for script in ("watergems_test.py", "sheets_test.py"):
+    for script in ("sewergems_test.py", "watergems_test.py", "sheets_test.py"):
         run = subprocess.run([sys.executable, str(ROOT / "tests" / script)], capture_output=True, text=True)
         assert run.returncode == 0, run.stdout + run.stderr
         print(f"{script}: ok")

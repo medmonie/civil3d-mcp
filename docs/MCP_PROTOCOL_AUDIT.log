@@ -1,0 +1,388 @@
+Civil 3D MCP engineering audit | v0.21.0 | 2026-11-25
+====================================================
+
+Executive summary
+-----------------
+The validated source is suitable for supervised local use on a verified
+target drawing. Broader workspace deployment still needs file authorization,
+bounded workloads and explicit recovery contracts for multi-stage imports.
+Native profile edits can silently remove vertical curves or commit without a
+requested curve. Treat that as a blocker for production use of those actions.
+
+The audited runtime is the Python stdio server, its bundled entry point, the
+private loopback bridge, and native code paths supporting the findings below.
+The loopback protocol and its correlation IDs are private to this project.
+MCP and JSON-RPC requirements apply at the public stdio boundary. The optional
+external ChatGPT tunnel is client-side configuration in this repository.
+ChatGPT and Claude applications and the tunnel were outside live verification.
+
+Evidence types used below are source-confirmed, observed on the installed
+dependency, and conditional on specific inputs or deployment. Line numbers
+refer to the patched workspace. Findings marked Fixed include code changes in
+this task. The workspace had no Git baseline. Earlier audit files remain as
+historical records.
+
+Critical
+--------
+No Critical finding was established under the local workstation trust model
+and the interfaces inspected. The project should still address the High
+findings before exposing additional client identities or enabling native profile
+edits on production drawings.
+
+High
+----
+H1 | Edit integrity | Fixed | plugin/Bridge/EditRequests.cs:56-100
+The previous ledger evicted old request identities after reaching its entry
+limit. An identical retry of a previously committed edit could execute again.
+It also allowed retries of every state=error even when execution had begun.
+The patch retains identity and outcome for the session, refuses new IDs at
+8,192 entries, and allows the same ID to run again only for the typed queue
+timeout that proves the native delegate never began. Full receipt caching
+remains bounded. At saturation, restart Civil 3D and read the drawing to get
+new identifiers. A durable per-drawing stage history would remove the restart
+requirement and allow cross-session recovery.
+
+H2 | Cancellation and calling order | Fixed for later stages |
+server/server.py:140-181 and server/bridge_client.py:72-129
+A cancelled stdio request could leave the synchronous worker executing later
+write stages. The patch propagates a cancellation signal to that worker and
+checks it before subsequent bridge requests and at send time. Once Civil 3D
+accepts a request, it may finish and must be reconciled through edit status.
+An absolute deadline and safely interruptible read/parse jobs remain open.
+Specification reference at the end of this report.
+
+H3 | MCP tool error propagation | Fixed | server/server.py:56-71
+Native receipts for denied edits, rolled-back edits and failed after-commit
+work could be sent as successful tool calls. Failed or partial workflows could
+have the same issue. The patch sets isError and preserves the receipt in JSON
+text and structuredContent. Pending operations and successful dry runs remain
+normal responses. JSON-RPC request errors stay at the protocol layer.
+
+H4 | Local file authorization | Open, deployment-dependent |
+plugin/Read/SheetRead.cs:196-198, plugin/Edit/BlockOps.cs:126-142,
+server/sewergems.py:69-111, server/watergems.py:115-123 and README.md:113-139
+Read-only mode permits inspect_file and workbook/CSV checking actions. They
+take client-selected paths and read with the host Windows user's existing
+permissions. There is no project-root policy at those entry points. This also
+applies when an external tunnel starts the server with --read-only. The data
+visible depends on the Windows account, server configuration and connected
+workspace participants. Canonicalize local paths against administrator-approved
+roots, verify symlink/reparse-point behavior, handle UNC paths explicitly and
+apply a common policy for every read and write path. Native file inspection
+also needs a process-level boundary where robust isolation is required.
+
+H5 | Geometry loss | Open, source-confirmed |
+plugin/Edit/AlignmentOps.cs:117-156 and :187-221
+An elevation-only change removes the existing PVI and replaces it with a
+tangent PVI when curve data was omitted. Curve creation also catches any
+exception, can restore a tangent PVI and returns a warning, so the outer
+transaction can commit without the requested geometry. Distinguish omitted
+curve data from explicit curve removal, preserve the existing curve on an
+elevation-only move, and let explicit curve creation errors roll back the edit.
+Verify parabola, asymmetric and circular cases on the native releases before
+shipping the geometry change.
+
+H6 | Partial workflows and recovery | Partially fixed |
+server/watergems.py:728-822 and server/sewergems.py:680-735
+The network transaction commits before dependent profile/layout/report work.
+WaterGEMS does further work after that commit outside the broad stage handler,
+including preparation before the try block and postflight cover reporting.
+An exception there can omit the committed-network receipt. When the cached
+core reply expires, WaterGEMS explicitly lacks the part handles it needs to
+resume. The patch fixes SewerGEMS finish-stage recovery after a known pre-start
+timeout by retrying the same ID. The ledger verifies that the regenerated
+operation parameters still match. Persist stage state and
+needed object references, validate and plan independent stages before commit,
+make postflight errors return the committed-stage receipt. Exercise interruption
+at every commit boundary.
+
+H7 | Native work budget | Open, input-dependent |
+plugin/Read/GeometryRead.cs:200-201, :302-313 and
+plugin/Read/CivilRead.cs:214-262
+Fallback material sampling divides segment length by a caller-supplied positive
+step, narrows the result to int and loops with no aggregate budget. Very small
+steps can create excessive work or exceed the int conversion range. Pipe
+interference scans pairs and retains all matching results before taking the
+output limit. The operations run on the Civil 3D application thread. Validate
+the segment ratio before the cast, cap aggregate samples, add a spatial
+candidate index and retain the bounded best hits while tracking total matches.
+
+H8 | Upgrade can remove a read-only client setting | Open, source-confirmed |
+package/configure_clients.ps1:51-65 and :82-104
+When changing an existing Claude command path, the installer replaces the
+whole civil3d object with a command-only object. The Codex updater replaces
+the entire table and sub-tables, even at the same executable path when extra
+settings exist. An existing args=["--read-only"] or split-mode environment can
+be lost and the tool exposure can change. The native drawing permission still
+applies. Change only the command key, preserve args/env and other user fields,
+validate staged JSON or TOML before atomic replacement, and test upgrades with
+existing read-only configurations. No client settings were changed in this
+audit.
+
+Medium
+------
+M1 | SDK lifecycle | Open, observed on MCP Python SDK 1.30.0 |
+server/server.py:190-232 and installed mcp/server/session.py:175-214
+The SDK accepted tools/list after initialize without notifications/initialized.
+More importantly, notifications/initialized followed by tools/list worked
+without any initialize request. The former violates the client-side sequence,
+and by itself does not demonstrate failure with a compliant client. The latter
+shows that the SDK can enter its ready state without version/capability
+negotiation. Require ordered session state in an upstream SDK fix or a tested
+transport adapter. Keep valid initialize, ping and notification tests alongside
+the out-of-order cases.
+
+M2 | JSON-RPC error mapping | Open, observed on MCP Python SDK 1.30.0 |
+installed mcp/shared/session.py:366-394, mcp/server/stdio.py:66-79
+and mcp/server/lowlevel/server.py:708-719
+After successful initialization an unrecognized method returned -32602
+(Invalid params) instead of -32601 (Method not found). A malformed JSON line
+produced notifications/message without a -32700 parse-error response with a
+null ID. Fix dispatch and parsing in the SDK or use a pinned adapter tested
+with method errors, invalid requests, malformed frames and notifications.
+The compliant handshake, IDs and clean EOF passed independently.
+
+M3 | Input types and schema | Partially fixed |
+server/server.py:74-132, :190-217, plugin/Core/J.cs:29-62
+The public tool schema exposes action as a string and params as an open
+dictionary. It cannot tell clients which fields or types a nested operation
+requires. Native string/choice helpers also treat invalid non-string values
+as absent in some paths. The patch validates the affected dry_run and QA
+inputs, removes the duplicate WaterGEMS import target description and
+validates the help topic. Define typed per-action and per-operation schemas
+and generate descriptions from them. Preserve a compatibility path for the
+existing action/params API. Use strict validation for values that select or
+change drawing objects.
+
+M4 | Inconsistent multi-read QA | Fixed | server/qa.py:41-63
+The check ran four requests using whichever drawing was active at each call.
+A drawing or Civil 3D instance change could mix unrelated results. The first
+reply binds the target when omitted, or the caller can pass a known target.
+All remaining reads use that identity. The result includes the target.
+
+M5 | Sheet retry work | Fixed | server/sheets.py:355-387
+Retry discovery had no per-stage scan bound and accepted any state=error
+for resubmission. The patch limits lookup to eight attempt IDs per stage,
+resumes only known pre-start errors and refuses unknown outcomes for
+inspection. Applied-stage receipts and known rollback handling are retained.
+
+M6 | Unbounded regex and file parsing | Open, input-dependent |
+server/qa.py:14-29, server/sewergems.py:69-91, server/watergems.py:78-123
+Layer QA matches an unrestricted caller-provided Python regex synchronously
+over up to 20,000 layers. Workbook/CSV readers materialize records without a
+cell/row or expanded-byte budget before later model limits. The worker model
+cannot safely interrupt that CPU work. Use a safe regex subset or an isolated
+worker with a deadline and limit workbook entries, expanded bytes and rows.
+
+M7 | Transport bounds and teardown | Partially fixed |
+server/bridge_client.py:83-153, plugin/Bridge/BridgeServer.cs:144-244
+The previous private transport accepted partial EOF frames and allowed long
+idle connections. The patch requires complete frames, caps discovery and
+response frames, validates basic envelope fields and shortens idle slots.
+Socket reads still use a per-operation timeout, public SDK stdio has no
+application frame cap, and private connections share a 16-slot pool before
+authentication. Bridge shutdown cancels the listener without tracking or
+awaiting active handlers. Use per-call monotonic deadlines, bounded frame
+parsing, a short separate pre-authentication budget, reserved status capacity
+and a tracked shutdown for listeners and clients.
+
+M8 | Multi-instance ownership | Open, conditional on concurrent startup or PID reuse |
+plugin/Bridge/BridgeServer.cs:40-108, :133-159
+Descriptor replacement is atomic per write, but owner lookup, publication,
+shutdown deletion and handoff are separate operations. The liveness test
+identifies the owner by PID alone. Competing start/stop events can race, and a
+stale descriptor can appear live if Windows has reused the PID. Serialize
+election/publication with a named lock. Validate owner identity with the
+session ID and process start time under that lock.
+
+M9 | Read-only classification and hints | Partially fixed |
+server/server.py:187-188, plugin/Read/ViewRead.cs:72-97
+The read tool can change the active view, layout and implied selection via
+show_objects. Both tool groups previously advertised a closed world despite
+user-selected local file access. The patch makes the open-world hint accurate.
+Expose interactive view/selection operations in a distinct tool if the
+read-only client contract is intended to exclude UI changes.
+
+M10 | Long-running requests and retries | Open, input-dependent |
+plugin/Bridge/MainThread.cs:31-71, plugin/Bridge/BridgeServer.cs:288-301
+The queue timeout abandons the work atomically but the posted callback still
+has to drain from Civil 3D's UI context. Repeated busy pings can accumulate
+abandoned callbacks while the UI is blocked. Status stays independent of UI
+dispatch. Coalesce ping probes and use a bounded, drainable work queue.
+
+Low
+---
+L1 | Dependency and release reproducibility | Partially fixed |
+server/requirements.txt:1-5 and build_package.bat:28-29
+Application code directly uses AnyIO, Pydantic and typing-extensions. Those
+requirements are now declared, but the resolver still accepts a broad MCP
+version range and the live audit covers one version. Pin the SDK for shipped
+packages and run the conformance suite before expanding the tested range.
+
+L2 | Host metadata in errors | Open, source-confirmed |
+server/bridge_client.py:109-138 and plugin/Core/WriteGate.cs:19-29
+Some user-visible messages include a full local descriptor or audit-log path.
+Native error text also forwards the underlying exception message. Return safe
+client-facing fields and keep detailed host diagnostics in local logs.
+No credential value or full exception stack was observed in the tested tool
+results.
+
+L3 | Performance scaling and dead parameters | Open |
+server/watergems.py:507-568, :612-627, :656-661 and :776-778
+mains rebuilds and sorts a forest for each extracted path. The repeated
+component scan can be quadratic on fragmented networks. _summary rescans all
+pipes for each material-and-size group. The phase argument to _edit and
+stage argument to failed are unused. Use a component-aware worklist and
+one-pass aggregation, and remove dead arguments after checking callers.
+
+Redundancies and behavior-preserving cleanup
+-------------------------------------------
+- Keep the legacy public tool while introducing a shared machine-readable
+  action registry. The single tool currently advertises about 41,600
+  description characters. Its shallow schema leaves routing and validation
+  details in prose. Centralize metadata, validation and registration for
+  Python and C#. Static checks now catch duplicate native registrations.
+- A common stage coordinator can replace repeated receipt and recovery logic
+  across WaterGEMS, SewerGEMS and sheets. First capture each workflow's dry-run,
+  status, partial-commit and retry rules in fixtures. Keep the separate
+  workflow semantics while factoring transport and receipt handling.
+- Share workbook field parsing only where units, nullable values and accepted
+  header aliases agree. Keep Civil 3D geometry calculations outside transport
+  handlers. The source scan found no cross-client notification feedback loop
+  or unbounded recursive traversal in the network-line walkers inspected.
+
+Verification
+------------
+- The patched Python smoke suite passed. This includes raw MCP 2025-06-18
+  negotiation, integer/string response IDs, notification silence, clean
+  stdout framing and EOF, cancellation, tool errors, split and read-only
+  modes, SewerGEMS, WaterGEMS and sheet fixtures, and generated-catalogue checks.
+- The source MCP server negotiated 2025-11-25 against a live Civil 3D 2027
+  bridge on unsaved Drawing1.dwg. Drawing and Civil object reads, targeted QA
+  reads and stale drawing target rejection passed for both read and edit entry
+  points. The scratch drawing still reported editing disabled. The native
+  valid-target dry run, commit and rollback were blocked by that drawing's
+  edit gate. The test drawing remains unsaved.
+- A live private bridge probe ignored an incomplete EOF frame and accepted the
+  equivalent complete read request.
+- Isolated raw stdio probes produced both SDK behaviors documented in M1
+  and M2. Tested with MCP 1.30.0, AnyIO 4.15.1 and Pydantic 2.14.1.
+- The real C# ledger source passed a harness for 8,192 entries, oldest-ID
+  replay, a known pre-start timeout and an uncertain execution failure.
+- Release build succeeded for Civil 3D 2024, 2025 and 2027. The build reported
+  34 existing obsolete-API and nullable-assignment warnings and zero errors.
+  Native 2024/2025, production DWGs, full imports, ChatGPT, Claude and the
+  packaged distribution were outside the live run.
+
+Official protocol references
+----------------------------
+MCP 2025-11-25 lifecycle
+https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle
+MCP stdio and transport requirements
+https://modelcontextprotocol.io/specification/2025-11-25/basic/transports
+MCP tools and execution error handling
+https://modelcontextprotocol.io/specification/2025-11-25/server/tools
+MCP cancellation
+https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/cancellation
+MCP message framing and ID rules
+https://modelcontextprotocol.io/specification/2025-11-25/basic/index
+JSON-RPC 2.0 message error codes
+https://www.jsonrpc.org/specification
+
+File-by-file change log
+-----------------------
+server/server.py
+  Added cancellation propagation, MCP error receipts and strict type checks
+  for help topic, QA options and dry_run.
+  Removed truthiness-based substitution of invalid empty params values.
+  Modified default-name QA dispatch and open-world annotations.
+  Why | Keep edit failures, client cancellation and public hints accurate.
+
+server/bridge_client.py
+  Added a per-call cancellation signal, discovery/request/reply size limits
+  and descriptor/envelope validation.
+  Removed acceptance of EOF without a newline as a complete reply.
+  Modified connection/send handling to check cancellation before a send.
+  Why | Avoid sending follow-up work and reject invalid bridge frames.
+
+plugin/Bridge/MainThread.cs
+  Added CadQueueTimeoutException after the atomic queued-to-abandoned
+  transition.
+  Modified queue timeout classification while retaining the existing wait for
+  a delegate that has already started.
+  Why | Give the edit ledger positive proof when a retry is safe.
+
+plugin/Bridge/EditRequests.cs
+  Added the retryable status field and a fail-closed session capacity check.
+  Removed eviction of edit identities and blanket retry of all error states.
+  Modified error replay to preserve terminal identity and status.
+  Why | Avoid re-execution after history pressure or an ambiguous failure.
+
+plugin/Bridge/BridgeServer.cs
+  Removed acceptance of partial request lines at EOF.
+  Modified the private idle timeout from ten minutes to five seconds.
+  Why | Retain only complete frames and reduce idle slot occupancy.
+
+server/qa.py
+  Added optional target input and the resolved target in the default-name
+  report.
+  Modified the lookups to keep each result tied to the same open drawing.
+  Why | Prevent cross-drawing QA summaries during document switching.
+
+server/sheets.py
+  Added an eight-attempt lookup cap and terminal handling of uncertain errors.
+  Removed unbounded attempt lookup and blanket error replay.
+  Why | Bound retry discovery and respect the native ledger's safety rule.
+
+server/sewergems.py
+  Modified finish recovery to resend a known pre-start queue timeout under the
+  original finish ID. Terminal failures keep their recorded receipt.
+  Why | Allow safe recovery without recreating the committed core network.
+
+server/catalog.py
+  Removed the duplicate optional WaterGEMS import target entry.
+  Modified edit retry guidance and documented optional target for default-name
+  QA.
+  Why | Advertise the same preconditions and retry behavior as the code.
+
+server/requirements.txt
+  Added explicit AnyIO, Pydantic and typing-extensions requirements.
+  Why | Record directly imported dependencies for source and package installs.
+
+docs/ACTIONS.md
+  Regenerated the action reference from the catalogue.
+  Why | Keep the published tool descriptions aligned with the implementation.
+
+tests/smoke_test.py
+  Added raw stdio handshake/frame checks, cancellation and declined-error
+  checks, dry_run type checks, drawing identity assertions and duplicate
+  registry checks. Added the SewerGEMS unit suite to the smoke entry point.
+  Why | Cover the changed public behavior and catch silent registration drift.
+
+tests/live_protocol_test.py
+  Added a test for source stdio against a blank native drawing, with an
+  explicit edit mode for dry run, rollback, commit, replay and cleanup.
+  Why | Verify the same protocol path the client uses against the real add-in.
+
+tests/sheets_test.py
+  Added cases for an uncertain edit, a safe same-ID retry and a saturated
+  per-stage retry chain.
+  Why | Verify the sheet workflow respects the edit ledger and lookup bound.
+
+tests/sewergems_test.py
+  Added a pre-start queue timeout to the finish-stage recovery fixture and
+  asserted that finishing reuses its ID before advancing a known rollback.
+  Why | Distinguish safe same-ID recovery from a fresh transaction attempt.
+
+tests/results/protocol_audit_20261125/LedgerAudit.csproj and Program.cs
+  Added a local audit harness that compiles the real ledger source with small
+  stubs for Autodesk-dependent types and drives its capacity and retry cases.
+  Build outputs follow the workspace's ignored test-results convention.
+
+tests/results/protocol_audit_20261125/installed_2027_backup/C3dMcpBridge.dll
+  Added a backup of the previously installed Civil 3D 2027 binary. Deployed the
+  built DLL for the live session and confirmed its SHA-256 matched the build.
+  Why | Make the installed change reversible and verify the tested binary.
+
+docs/MCP_PROTOCOL_AUDIT.log
+  Added this audit, verification record and per-file change log.

@@ -52,12 +52,38 @@ internal static class GeometryRead
                     curveGroup = al.ConnectedAlignmentInfo.CurveGroupType.ToString(),
                     offsetIn = R3(al.ConnectedAlignmentInfo.OffsetIn), offsetOut = R3(al.ConnectedAlignmentInfo.OffsetOut),
                 }) : null,
-                note = "Directions are bearings in degrees measured counter-clockwise from east (Civil 3D's internal angle).",
+                note = "bearing = azimuth in degrees clockwise from north (grid north of the drawing); angleFromEast = degrees "
+                     + "counter-clockwise from east (+X), as AutoCAD angles. Both are computed from the coordinates. Curves give "
+                     + "the bearing of travel at their start and end; a spiral's turn is Left or Right.",
             };
         });
     }
 
     private static double[] P2(Point2d q) => new[] { R3(q.X), R3(q.Y) };
+
+    /// <summary>Direction of a plan vector as bearing (clockwise from north), angle from east and a quadrant bearing.</summary>
+    internal static void Dir(Dictionary<string, object?> row, string prefix, Vector2d v)
+    {
+        if (v.Length < 1e-12) return;
+        double east = Math.Atan2(v.Y, v.X) * 180 / Math.PI;
+        if (east < 0) east += 360;
+        double az = (450 - east) % 360;
+        string Key(string k) => prefix.Length == 0 ? k : prefix + char.ToUpperInvariant(k[0]) + k.Substring(1);
+        row[Key("bearing")] = Math.Round(az, 6);
+        row[Key("angleFromEast")] = Math.Round(east, 6);
+        row[Key("quadrantBearing")] = Quadrant(az);
+    }
+
+    internal static string Quadrant(double az)
+    {
+        string ns = az <= 90 || az >= 270 ? "N" : "S", ew = az < 180 ? "E" : "W";
+        double a = az <= 90 ? az : az < 180 ? 180 - az : az < 270 ? az - 180 : 360 - az;
+        if (a < 1e-9) return ns == "N" ? "N" : "S";
+        if (Math.Abs(a - 90) < 1e-9) return ew;
+        int d = (int)a; double mf = (a - d) * 60; int m = (int)mf; double sec = Math.Round((mf - m) * 60, 1);
+        if (sec >= 60) { sec = 0; m++; } if (m >= 60) { m = 0; d++; }
+        return $"{ns} {d}\u00b0{m:00}'{sec:00.0}\" {ew}";
+    }
 
     private static object SubEntity(CivilDb.AlignmentSubEntity s)
     {
@@ -70,17 +96,25 @@ internal static class GeometryRead
         switch (s)
         {
             case CivilDb.AlignmentSubEntityLine ln:
-                common["direction"] = Deg(ln.Direction);
+                Dir(common, "", s.EndPoint - s.StartPoint);
                 break;
             case CivilDb.AlignmentSubEntityArc a:
                 common["radius"] = R3(a.Radius); common["delta"] = Deg(a.Delta); common["clockwise"] = a.Clockwise;
-                common["center"] = P2(a.CenterPoint); common["piStation"] = Safe(() => R3(a.PIStation)); common["pi"] = Safe(() => P2(a.PIPoint));
+                common["center"] = P2(a.CenterPoint);
+                {
+                    // Travel direction = radius vector turned 90 degrees: left (+90) for counter-clockwise arcs, right for clockwise.
+                    Vector2d rs = a.StartPoint - a.CenterPoint, re = a.EndPoint - a.CenterPoint;
+                    Vector2d ts = a.Clockwise ? new Vector2d(rs.Y, -rs.X) : new Vector2d(-rs.Y, rs.X);
+                    Vector2d te = a.Clockwise ? new Vector2d(re.Y, -re.X) : new Vector2d(-re.Y, re.X);
+                    Dir(common, "start", ts); Dir(common, "end", te);
+                }
+                common["piStation"] = Safe(() => R3(a.PIStation)); common["pi"] = Safe(() => P2(a.PIPoint));
                 common["tangent"] = Safe(() => R3(a.ExternalTangent)); common["external"] = Safe(() => R3(a.ExternalSecant));
                 common["midOrdinate"] = Safe(() => R3(a.MidOrdinate)); common["chord"] = Safe(() => R3(a.ChordLength));
                 break;
             case CivilDb.AlignmentSubEntitySpiral sp:
                 common["a"] = Safe(() => R3(sp.A)); common["radiusIn"] = Safe(() => R3(sp.RadiusIn)); common["radiusOut"] = Safe(() => R3(sp.RadiusOut));
-                common["spiralType"] = Safe(() => sp.SpiralDefinition.ToString()); common["direction"] = Safe(() => sp.Direction.ToString());
+                common["spiralType"] = Safe(() => sp.SpiralDefinition.ToString()); common["turn"] = Safe(() => sp.Direction.ToString());
                 common["spiStation"] = Safe(() => R3(sp.SPIStation)); common["p"] = Safe(() => R3(sp.P)); common["k"] = Safe(() => R3(sp.K));
                 common["delta"] = Safe(() => Deg(sp.Delta));
                 break;
@@ -199,18 +233,27 @@ internal static class GeometryRead
         string alName = NeedStr(p, "alignment"), groupName = NeedStr(p, "group");
         string? only = StrParam(p, "material_list");
         double step = PositiveParam(p, "step") ?? 0.25;
+        double? from = DblParam(p, "from_station"), to = DblParam(p, "to_station");
+        if (from is double f0 && to is double t0 && t0 <= f0)
+            throw new ArgumentException("get_material_volumes: 'to_station' must be greater than 'from_station'.");
+        bool InRange(double st) => (from == null || st >= from.Value - 1e-6) && (to == null || st <= to.Value + 1e-6);
         return WithRead((db, tr) =>
         {
             var al = FindAlignment(Civ, tr, alName);
             var g = TryFindSampleLineGroup(tr, al, groupName)
                     ?? throw new ArgumentException($"Sample line group '{groupName}' not found on alignment '{al.Name}'. Use list_sample_lines.");
-            var lines = AlignmentRead.SampleLines(tr, g).OrderBy(l => l.Station).ToList();
+            // With a station range only the sample lines inside it count: volumes between consecutive lines in the range.
+            var lines = AlignmentRead.SampleLines(tr, g).Where(l => InRange(l.Station)).OrderBy(l => l.Station).ToList();
+            if (lines.Count < 2 && (from != null || to != null))
+                throw new ArgumentException($"get_material_volumes: fewer than two sample lines of '{g.Name}' lie between stations " +
+                                            $"{from?.ToString() ?? "start"} and {to?.ToString() ?? "end"}; widen the range or add sample lines.");
             var lists = new List<object>();
             foreach (CivilDb.QTOMaterialList list in g.MaterialLists)
             {
                 if (only != null && !SameName(list.Name, only)) continue;
                 CivilDb.QTOSectionalResult[] civil = Array.Empty<CivilDb.QTOSectionalResult>();
                 try { civil = g.GetTotalVolumeResultDataForMaterialList(list.Guid).GetResultsAlongSampleLines() ?? civil; } catch { /* not computed */ }
+                civil = civil.Where(r => InRange(r.Station)).ToArray();
                 if (civil.Length > 0)
                 {
                     var rows = civil.OrderBy(r => r.Station).Select(r => new
@@ -220,10 +263,12 @@ internal static class GeometryRead
                         cutVolume = R3(r.VolumeResult.IncrementalCutVolume), fillVolume = R3(r.VolumeResult.IncrementalFillVolume),
                         cumulativeCut = R3(r.VolumeResult.CumulativeCutVolume), cumulativeFill = R3(r.VolumeResult.CumulativeFillVolume),
                     }).ToList();
+                    // Totals over the rows shown: the first row's incremental volume belongs to the segment before it.
+                    double cut = rows.Skip(1).Sum(r => r.cutVolume), fill = rows.Skip(1).Sum(r => r.fillVolume);
                     lists.Add(new
                     {
                         materialList = list.Name, source = "civil3d",
-                        totals = new { cut = rows[^1].cumulativeCut, fill = rows[^1].cumulativeFill, net = R3(rows[^1].cumulativeCut - rows[^1].cumulativeFill) },
+                        totals = new { cut = R3(cut), fill = R3(fill), net = R3(cut - fill) },
                         stations = rows,
                     });
                     continue;
@@ -234,11 +279,33 @@ internal static class GeometryRead
             }
             return new
             {
-                alignment = al.Name, group = g.Name, materialLists = lists,
+                alignment = al.Name, group = g.Name,
+                range = from != null || to != null ? new { fromStation = lines[0].Station, toStation = lines[^1].Station, sampleLines = lines.Count } : null,
+                materialLists = lists,
                 note = "source 'civil3d': Civil 3D's quantity takeoff. source 'computed': each surface sampled across every sample line " +
                        $"every {step} (trapezoids), volumes by average end area between consecutive sample lines. Areas in drawing units², volumes in units³.",
             };
         });
+    }
+
+    /// <summary>
+    /// Elevation sampler for a material item. A corridor surface item is named "&lt;corridor&gt; &lt;surface&gt;" in the material
+    /// list: it is found through the corridor and sampled on its TIN. Anything else is a TIN surface by name.
+    /// </summary>
+    private static Func<double, double, double?> MaterialSurface(Transaction tr, string itemName)
+    {
+        foreach (ObjectId cid in Civ.CorridorCollection)
+        {
+            var cor = (CivilDb.Corridor)tr.GetObject(cid, OpenMode.ForRead);
+            foreach (CivilDb.CorridorSurface cs in cor.CorridorSurfaces)
+                if (SameName(itemName, cs.Name) || SameName(itemName, cor.Name + " " + cs.Name))
+                {
+                    var ctin = (CivilDb.TinSurface)tr.GetObject(cs.SurfaceId, OpenMode.ForRead);
+                    return (x, y) => DataRead.Elev(ctin, x, y);
+                }
+        }
+        var tin = DataRead.Tin(tr, itemName);   // the error names the surface
+        return (x, y) => DataRead.Elev(tin, x, y);
     }
 
     /// <summary>One surface material: area at each sample line between its surfaces, and average-end-area volumes.</summary>
@@ -249,13 +316,22 @@ internal static class GeometryRead
         if (items.Any(i => i.type != CivilDb.MaterialItemType.Surface))
             return new { name = m.Name, type = m.QuantityType.ToString(), computed = false,
                          reason = "Has corridor shapes: run Compute Materials in Civil 3D, or read shape areas with get_corridor_section." };
-        var tins = items.ToDictionary(i => i.name, i => DataRead.Tin(tr, i.name), StringComparer.OrdinalIgnoreCase);
+        var tins = items.Select(i => i.name).Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(n => n, n => MaterialSurface(tr, n), StringComparer.OrdinalIgnoreCase);
         bool earthwork = m.QuantityType is CivilDb.MaterialQuantityType.Earthwork or CivilDb.MaterialQuantityType.CutFill;
         string? baseS = items.FirstOrDefault(i => i.cond == CivilDb.MaterialConditionType.Base).name;
         string? compS = items.FirstOrDefault(i => i.cond == CivilDb.MaterialConditionType.Compare).name;
         if (earthwork && (baseS == null || compS == null))
             return new { name = m.Name, type = m.QuantityType.ToString(), computed = false, reason = "An earthwork material needs a base and a compare surface." };
 
+        var hits = tins.Keys.ToDictionary(k => k, _ => 0, StringComparer.OrdinalIgnoreCase);
+        var sampled = tins.ToDictionary(kv => kv.Key, kv => (Func<double, double, double?>)((x, y) =>
+        {
+            var z = kv.Value(x, y);
+            if (z != null) hits[kv.Key]++;
+            return z;
+        }), StringComparer.OrdinalIgnoreCase);
+        tins = sampled;
         var rows = new List<(string line, double station, double a1, double a2)>();
         foreach (var sl in lines)
         {
@@ -272,7 +348,7 @@ internal static class GeometryRead
                     double? h1, h2 = null;
                     if (earthwork)
                     {
-                        var zb = DataRead.Elev(tins[baseS!], x, y); var zc = DataRead.Elev(tins[compS!], x, y);
+                        var zb = tins[baseS!](x, y); var zc = tins[compS!](x, y);
                         h1 = zb != null && zc != null ? Math.Max(zb.Value - zc.Value, 0) : null;   // cut: existing above design
                         h2 = zb != null && zc != null ? Math.Max(zc.Value - zb.Value, 0) : null;   // fill
                     }
@@ -282,7 +358,7 @@ internal static class GeometryRead
                         double lo = double.NegativeInfinity, hi = double.PositiveInfinity; bool ok = true;
                         foreach (var it in items)
                         {
-                            var z = DataRead.Elev(tins[it.name], x, y);
+                            var z = tins[it.name](x, y);
                             if (z == null) { ok = false; break; }
                             if (it.cond == CivilDb.MaterialConditionType.Above) lo = Math.Max(lo, z.Value);
                             else if (it.cond == CivilDb.MaterialConditionType.Below) hi = Math.Min(hi, z.Value);
@@ -313,9 +389,13 @@ internal static class GeometryRead
                         cutVolume = R3(v1), fillVolume = R3(v2), cumulativeCut = R3(c1), cumulativeFill = R3(c2) }
                 : (object)new { sampleLine = rows[i].line, station = R3(rows[i].station), area = R3(rows[i].a1), volume = R3(v1), cumulative = R3(c1) });
         }
+        var empty = hits.Where(h => h.Value == 0).Select(h => h.Key).ToList();
         return new
         {
             name = m.Name, type = m.QuantityType.ToString(), computed = true,
+            warning = empty.Count == 0 ? null
+                : $"No elevation found on {string.Join(", ", empty)} along any sample line: the surface is empty or out of date " +
+                  "(a corridor surface needs surface_rebuild after the corridor changes), so these volumes are 0.",
             surfaces = items.Select(i => new { surface = i.name, condition = i.cond.ToString() }).ToList(),
             totals = earthwork ? (object)new { cut = R3(c1), fill = R3(c2), net = R3(c1 - c2) } : new { volume = R3(c1) },
             stations = outRows,

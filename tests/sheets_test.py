@@ -200,6 +200,29 @@ def main() -> None:
     one = {**base, "sheets": [{"lines": ["A"]}]}
     assert not sheets.build(one)["built"]
     assert sheets.build(one)["built"] and len(fake.edits) == 3
+    from uuid import UUID
+
+    stage_id = UUID(REQUEST)
+    status = {"state": "error", "workflow": "audit", "retryable": False}
+    with patch.object(sheets, "call", return_value=status) as bridge:
+        try:
+            sheets._stage(TARGET, stage_id, "audit", lambda: [])
+        except ValueError as exc:
+            assert "uncertain outcome" in str(exc)
+        else:
+            raise AssertionError("A stage with an uncertain outcome must stop.")
+        assert bridge.call_count == 1
+    with patch.object(sheets, "call", side_effect=[{**status, "retryable": True}, {"applied": True}]) as bridge:
+        assert sheets._stage(TARGET, stage_id, "audit", lambda: [{"op": "layer_create"}])["applied"]
+        assert bridge.call_args.args[1]["request_id"] == REQUEST
+    with patch.object(sheets, "call", return_value={"state": "completed", "applied": False, "workflow": "audit"}) as bridge:
+        try:
+            sheets._stage(TARGET, stage_id, "audit", lambda: [])
+        except ValueError as exc:
+            assert "retry limit" in str(exc)
+        else:
+            raise AssertionError("A sheet stage must have a bounded retry search.")
+        assert bridge.call_count == sheets.MAX_STAGE_ATTEMPTS
     print("coverage, station-specific plans, missing viewports, bounded edits and lost-reply resume ok")
     print("\nALL OK")
 

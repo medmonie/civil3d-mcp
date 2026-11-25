@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.22.0
+
+**New**
+- `list_entities` reads inside a block definition (`block`) and the model space or a layout of another drawing on disk
+  (`path`), without opening it: e.g. a standard manhole or basin detail. Nested blocks show as INSERT and can be read
+  the same way.
+- `style_copy`: copy any Civil 3D style (label, object, band, band set, ...) under a new name, so the copy can be
+  edited and the original kept.
+- `profile_view_bands` with `band_set` now uses Civil 3D's own band-set import (copying the rows only when Civil 3D
+  refuses), and takes `rows` to set the profiles / network / gap of each imported row.
+
+**Fixed**
+- `profile_pvis_set`: changing only a PVI's elevation kept no vertical curve (it was removed and re-added plain). The
+  PVI is now moved in place and keeps its parabola, asymmetric parabola or circular curve (`curvesKept`). A curve that
+  was asked for and cannot be made now fails the edit (nothing applied) instead of a warning with the curve missing.
+  (ChatGPT audit H5)
+- A failed or dry-run batch could leave a profile's PVIs changed: Civil 3D does not undo PVI edits when the transaction
+  is aborted. `profile_pvis_set` now snapshots the profile and the engine puts it back before any rollback
+  (`EditContext.BeforeAbort`). Found by the new live test.
+- `get_alignment_geometry`: the note said directions were counter-clockwise from east. Directions are now computed from
+  the coordinates and given as `bearing` (azimuth, clockwise from north), `angleFromEast` and `quadrantBearing`
+  (e.g. N 45°30'00.0" E); curves give `startBearing` / `endBearing`; a spiral's left/right is `turn`.
+- `inspect_file`: `limit` capped only the entities of each layout, so a large template could return 100+ KB. It is now
+  one budget for the whole reply (layout entities, blocks, views, page setups) with a `truncated` list; `layout` reads
+  one layout only.
+
+## 0.21.0 (not released on its own: shipped in 0.22.0)
+
+**New**
+- `show_objects` (read): select objects and zoom to them, or zoom to a window, so the client can show the person what it
+  found. Changes only the view and selection, never the drawing. Objects on a layout make that layout current. (#52)
+- `profile_view_labels_add`: label the network parts shown in a profile view (gravity pipes and structures, pressure
+  pipes, fittings, appurtenances), with optional styles. Parts already labelled in that view are skipped. (#15)
+- `get_material_volumes` takes `from_station` / `to_station`: totals cover only the sample lines in that stretch. With a
+  material list of existing ground vs a corridor surface this gives corridor earthwork by station range. (#16)
+
+**Fixed**
+- Corridor surfaces stayed empty ("point outside surface") after a corridor was created or rebuilt by the MCP: their
+  TINs are now rebuilt after the commit (corridor_surface_add, corridor_rebuild and every operation that rebuilds a
+  corridor).
+- `get_material_volumes` found no surface for corridor surface items (named "<corridor> <surface>" in the material
+  list); it now resolves them through the corridor, and warns when a surface gives no elevation at all.
+
+**Protocol hardening** (from the ChatGPT protocol audit, `docs/MCP_PROTOCOL_AUDIT.log`; reviewed and merged)
+- Edit ledger: finished request IDs are no longer evicted, so a replayed ID can never run twice; at 8,192 IDs per
+  Civil 3D session new edits are refused (restart Civil 3D). A failed edit may be resent with the same ID only when it
+  timed out in the queue before it started (`retryable: true` in get_edit_status); any other error needs a look at the
+  drawing first.
+- Failed edits and failed imports/sheets now come back as MCP tool errors (`isError`) with the full receipt attached,
+  so clients no longer treat a rolled-back batch as success.
+- A cancelled MCP call sends no further bridge requests (later import / sheet stages stop); an edit already sent keeps
+  its request ID.
+- Bridge transport: request 4 MiB, reply 32 MiB and discovery file 16 KiB limits; a reply cut off mid-line, without a
+  status flag or without a result is reported as an error; an idle connection is dropped after 5 s; a partial request at
+  end of stream is never run.
+- `check_default_names` reads every list from one drawing (takes `target`); sheet stages stop after 8 attempts;
+  stricter input types (`dry_run`, `skip_xref_layers`, help `topic`); `requirements.txt` pins anyio and pydantic.
+- Tests: `tests/live_protocol_test.py` (`run_protocol.bat`), `tools/ledger_audit` (offline ledger check).
+
+**Installer**
+- `install.bat` now adds `civil3d` to Claude Desktop (classic and Microsoft Store / MSIX installs) and Codex itself
+  (`package\configure_clients.ps1`): other servers and settings are kept, files are backed up first, invalid JSON is
+  left unchanged and reported. Before, it only wrote snippets: a snippet pasted whole into a config that already had
+  `mcpServers` made the file invalid, and the Store version of Claude reads its config from another folder.
+
+Live test: `tests\run_next.bat` (Civil 3D 2027, ALL PASS); `tests\run_configure_clients.bat` (sample configs, ALL PASS).
+
 ## 0.20.0
 
 **Found in the live test**

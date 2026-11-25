@@ -10,13 +10,19 @@ import os
 import socket
 import time
 import uuid
+from contextvars import ContextVar
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 from typing_extensions import TypedDict
 
 READ_TIMEOUT = 90.0     # the plugin gives up waiting for a busy Civil 3D after 30 s
 EDIT_TIMEOUT = 630.0    # an edit may wait for the one-time permission dialog (the plugin stops honouring it at 9 min)
+MAX_DISCOVERY_BYTES = 16 * 1024
+MAX_REQUEST_BYTES = 4 * 1024 * 1024
+MAX_REPLY_BYTES = 32 * 1024 * 1024
+request_cancelled: ContextVar[Event | None] = ContextVar("request_cancelled", default=None)
 
 
 class BridgeError(RuntimeError):
@@ -60,7 +66,14 @@ def bridge_file() -> Path:
     return Path(base) / "C3dMcpBridge" / "bridge.json"
 
 
+def _check_cancelled() -> None:
+    stop = request_cancelled.get()
+    if stop is not None and stop.is_set():
+        raise BridgeError("The MCP call was cancelled before this Civil 3D request was sent.")
+
+
 def call(method: str, params: dict[str, Any] | None = None, timeout: float = READ_TIMEOUT) -> Any:
+    _check_cancelled()
     params = dict(params or {})
     target = drawing_target(params) if method in ("edit", "get_edit_status") or "target" in params else None
     if target is not None:
@@ -70,9 +83,20 @@ def call(method: str, params: dict[str, Any] | None = None, timeout: float = REA
 
     path = bridge_file()
     for attempt in range(3):
+        _check_cancelled()
         try:
-            info = json.loads(path.read_text(encoding="utf-8"))
-            port, token = int(info["port"]), str(info["token"])
+            with path.open("rb") as discovery:
+                raw = discovery.read(MAX_DISCOVERY_BYTES + 1)
+            if len(raw) > MAX_DISCOVERY_BYTES:
+                raise ValueError("bridge descriptor exceeds its size limit")
+            info = json.loads(raw.decode("utf-8"))
+            if not isinstance(info, dict):
+                raise ValueError("bridge descriptor must be an object")
+            port, token = info.get("port"), info.get("token")
+            if type(port) is not int or not 1 <= port <= 65535:
+                raise ValueError("bridge port must be an integer from 1 to 65535")
+            if not isinstance(token, str) or not 1 <= len(token) <= 256:
+                raise ValueError("bridge token must be a non-empty string of at most 256 characters")
             break
         except FileNotFoundError:
             raise BridgeError(
@@ -92,14 +116,18 @@ def call(method: str, params: dict[str, Any] | None = None, timeout: float = REA
             raise BridgeError("The selected Civil 3D session changed. Targeted requests require their original session.")
 
     request = {"id": uuid.uuid4().hex, "token": token, "method": method, "params": params}
+    frame = (json.dumps(request, sort_keys=True, allow_nan=False) + "\n").encode("ascii")
+    if len(frame) - 1 > MAX_REQUEST_BYTES:
+        raise BridgeError("Civil 3D request exceeds the 4 MiB bridge limit. Split the request into smaller calls.")
     edit_outcome = (f" Edit outcome is unknown. Check get_edit_status with request_id {params['request_id']} "
                     "and the original target before retrying.") if method == "edit" else ""
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
             sock.settimeout(timeout)
-            sock.sendall((json.dumps(request, sort_keys=True, allow_nan=False) + "\n").encode("utf-8"))
+            _check_cancelled()
+            sock.sendall(frame)
             with sock.makefile("rb") as reply_file:
-                line = reply_file.readline()
+                line = reply_file.readline(MAX_REPLY_BYTES + 1)
     except socket.timeout:
         raise BridgeError(f"Civil 3D did not answer within {timeout:.0f} s.{edit_outcome}") from None
     except OSError as exc:
@@ -110,14 +138,22 @@ def call(method: str, params: dict[str, Any] | None = None, timeout: float = REA
 
     if not line:
         raise BridgeError(f"Civil 3D closed the connection without a reply.{edit_outcome}")
+    if len(line) > MAX_REPLY_BYTES:
+        raise BridgeError(f"Civil 3D reply exceeds the 32 MiB bridge limit.{edit_outcome}")
+    if not line.endswith(b"\n"):
+        raise BridgeError(f"Civil 3D closed the connection before the reply was complete.{edit_outcome}")
     try:
         reply = json.loads(line.decode("utf-8"))
     except ValueError as exc:
         raise BridgeError(f"Civil 3D sent an unreadable reply: {exc}.{edit_outcome}") from None
     if not isinstance(reply, dict) or reply.get("id") != request["id"]:
         raise BridgeError(f"Civil 3D sent a reply with an unexpected request ID.{edit_outcome}")
-    if not reply.get("ok"):
+    if type(reply.get("ok")) is not bool:
+        raise BridgeError(f"Civil 3D sent a reply without a valid status flag.{edit_outcome}")
+    if not reply["ok"]:
         raise BridgeError(f"Civil 3D reported: {reply.get('error', 'unknown error')}")
+    if "result" not in reply:
+        raise BridgeError(f"Civil 3D sent a success reply without a result.{edit_outcome}")
     result = reply.get("result")
     if not isinstance(result, dict):
         return result

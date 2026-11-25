@@ -21,6 +21,12 @@ internal sealed class EditContext
     /// </summary>
     public List<Action> AfterEnd { get; } = new();
 
+    /// <summary>
+    /// Work that undoes changes the transaction cannot roll back itself (Civil 3D profile PVIs). Runs newest first,
+    /// inside the transaction, just before it is aborted (a failed batch or a dry run). Never runs after a commit.
+    /// </summary>
+    public List<Action> BeforeAbort { get; } = new();
+
     private const int MaxWarnings = 200;
     private int _suppressed;
 

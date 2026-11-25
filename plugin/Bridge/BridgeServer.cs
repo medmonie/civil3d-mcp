@@ -21,7 +21,7 @@ internal static class BridgeServer
     private static readonly TimeSpan PingWait = TimeSpan.FromSeconds(2);
     private const int MaxRequestChars = 4 * 1024 * 1024;                       // 4 MB per request line (large edit batches)
     private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(30);   // a started request line must finish in 30 s
-    private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(10);   // idle connections are dropped
+    private static readonly TimeSpan IdleTimeout = TimeSpan.FromSeconds(5);    // idle connections cannot hold a slot indefinitely
     private const int MaxConnections = 16;
     private static int _connections;
 
@@ -231,7 +231,7 @@ internal static class BridgeServer
                 {
                     _start = 0;
                     _end = await reader.ReadAsync(_block.AsMemory(), timer.Token);
-                    if (_end == 0) return line.Length == 0 ? null : line.ToString();   // connection closed
+                    if (_end == 0) return null;   // Only dispatch complete newline-delimited requests.
                 }
                 if (!started) { started = true; timer.CancelAfter(ReadTimeout); }   // replaces the idle timer
 

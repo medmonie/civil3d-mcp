@@ -21,9 +21,9 @@ This file has two parts: what the Civil 3D MCP does today (v0.16.0), and what co
 
 ---
 
-## 1. What it does today (v0.18.0)
+## 1. What it does today (v0.22.0)
 
-63 read actions and 101 edit operations, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. A dry run executes and rolls back. Each edit names the drawing it is for and carries a request ID, so it cannot land in the wrong drawing or run twice. Editing needs permission per drawing (`MCPALLOW` or the dialog). Works with Claude, ChatGPT desktop and Codex; ChatGPT in a browser connects read-only. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
+72 read actions and 132 edit operations, plus SewerGEMS / WaterGEMS imports and plan & profile sheets, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. A dry run executes and rolls back. Each edit names the drawing it is for and carries a request ID, so it cannot land in the wrong drawing or run twice. Editing needs permission per drawing (`MCPALLOW` or the dialog). Works with Claude, ChatGPT desktop and Codex; ChatGPT in a browser connects read-only. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
 
 | Area | Read | Create / edit |
 |---|---|---|
@@ -107,7 +107,7 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 | 49 | ✅ 0.16 **Part data and user properties** | `get_part_data`, `list_user_properties`, `get_user_property_values`. |
 | 50 | ✅ 0.16 **Section data** | `get_sections`, `get_corridor_section`. |
 | 51 | ✅ 0.16 **Surface sampling** | `sample_surface`, `pipe_ground_profile`. |
-| 52 | **Selection and view control** | Highlight, select or zoom to objects so the client can show what it found. |
+| 52 | ✅ 0.22 **Selection and view control** | `show_objects`: select and zoom to objects (or a window) so the client can show what it found. |
 | 53 | ✅ 0.19 **Corridor feature lines and codes along a station range** | `get_corridor_feature_lines`. |
 | 54 | ✅ 0.17 **Earthwork / material quantities** | `material_list_create`, `get_material_volumes`. |
 | 55 | ✅ 0.17 **Vertical curves** | Curves in `profile_create`, `profile_pvis_set`, `get_profile_geometry`. |
@@ -135,8 +135,8 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 | 12 | ✅ 0.19 **Surface from contours / DEM** | M | Build a surface from contour polylines with their elevations, or from a DEM file. |
 | 13 | **Data shortcuts** | M | Create and reference data shortcuts so a network or surface can be shared across drawings. |
 | 14 | ✅ 0.19 **Corridor targets** | M | Width and elevation targets (edge of pavement, ditch) from alignments, profiles and polylines. |
-| 15 | **Profile view labels for parts** | S | Pipe labels (size, slope, length) and structure labels (name, rim, inverts) inside profile views. |
-| 16 | **Earthwork volumes for corridors** | M | Cut and fill between existing ground and the corridor surface, by station range. |
+| 15 | ✅ 0.22 **Profile view labels for parts** | S | `profile_view_labels_add`: gravity pipe and structure labels, pressure pipe / fitting / appurtenance labels in a profile view; parts already labelled are skipped. |
+| 16 | ✅ 0.22 **Earthwork volumes for corridors** | M | Material list EG vs corridor surface, then `get_material_volumes` with `from_station` / `to_station`. Corridor surfaces are now rebuilt after each corridor rebuild. |
 | 17 | **Batch drawings** | M | Run the same read or QA action over every drawing in a folder, e.g. checking layer standards on a submittal set. |
 | 18 | **Block attribute round-trip test** | S | Live test of block definition, insertion and attribute editing (already coded, not yet tested live). |
 | 19 | **More QA checks** | S each | Objects on layer 0, unreferenced styles, structures with no pipes, pipes with no end structure, out-of-date corridors and surfaces. |
@@ -160,8 +160,8 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 The MCP gives facts and actions; design checks, quantities and code compliance are done by the AI client (as skills
 kept outside this repository) with the project's criteria.
 
-1. **Data access still missing:** #52 selection and view control, #11 LandXML export and alignment / network import, #13 data shortcuts.
-2. **Round-trips:** #8 model vs drawing differences (facts), #6 band table refresh, #15 profile view labels for parts.
+1. **Data access still missing:** #11 LandXML export and alignment / network import, #13 data shortcuts.
+2. **Round-trips:** #8 model vs drawing differences (facts), #6 band table refresh.
 3. **Reach:** #5 Civil 3D 2026 (2024 / 2025 done in 0.12).
 
 Effort figures are estimates. Anything marked XL depends on what Autodesk adds to the API.

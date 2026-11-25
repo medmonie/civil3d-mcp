@@ -35,10 +35,18 @@ READ_GROUPS: dict[str, Group] = {
                            {"group_by?": "'type' (default) or 'layer'", "layer?": "only this layer", "layout?": "a paper-space layout instead of model space"}),
         "get_selection": ("Objects the user has selected in Civil 3D: handle, type, layer, Civil name, extents.", {"limit?": "default 200"}),
         "get_objects": ("Describe objects by handle: type, layer, Civil name, extents.", {"handles": "list of handle strings"}),
+        "show_objects": ("Show the person objects in Civil 3D: select them (grips) and zoom to them, or zoom to a window. "
+                         "Changes only the screen (view and selection), never the drawing. Objects on a layout make that layout current.",
+                         {"handles?": "objects to show", "window?": "[[x1, y1], [x2, y2]] area to zoom to",
+                          "select?": "select the objects (default true with handles); false clears the selection",
+                          "zoom?": "zoom to them (default true)", "margin?": "space around them as a fraction of their size (default 0.1)"}),
         "list_entities": ("AutoCAD entities in model space with their geometry: lines, polylines (vertices), circles, arcs, text, "
-                          "mtext, points, block references (name, attributes), hatches, dimensions.",
+                          "mtext, points, block references (name, attributes), hatches, dimensions. Also inside a block definition "
+                          "(block) and in another drawing on disk (path), read without opening it, e.g. a manhole or basin detail.",
                           {"type?": "DXF type, e.g. LINE, LWPOLYLINE, CIRCLE, ARC, TEXT, MTEXT, POINT, INSERT, HATCH", "layer?": "",
-                           "window?": "[xmin, ymin, xmax, ymax]", "limit?": "default 100", "layout?": "a paper-space layout instead of model space"}),
+                           "window?": "[xmin, ymin, xmax, ymax]", "limit?": "default 100", "layout?": "a paper-space layout instead of model space",
+                           "block?": "entities inside this block definition (block coordinates); nested blocks show as INSERT, read them the same way",
+                           "path?": "full path of a .dwg / .dwt / .dxf to read instead of the open drawing (with layout or block too)"}),
         "list_blocks": ("Block definitions: name, attributes flag, number of references.", {"limit?": "default 500"}),
         "list_layouts": ("Layouts (paper space tabs): name, tab order, plot device, paper size.", {}),
     },
@@ -51,7 +59,9 @@ READ_GROUPS: dict[str, Group] = {
                             {"kind": "text_style | dim_style | mleader_style | table_style | linetype | layer_state | annotation_scale | page_setup"}),
         "inspect_file": ("Read a drawing or template on disk without opening it: layouts (paper, viewports with scale and model "
                          "area), block references and text on each layout, xrefs, blocks with attribute tags, named views, page setups.",
-                         {"path": "full path of a .dwg / .dwt / .dxf", "limit?": "entities listed per layout, default 60"}),
+                         {"path": "full path of a .dwg / .dwt / .dxf",
+                          "limit?": "items listed in the whole reply (layout entities, blocks, views, page setups together), default 60; 'truncated' says what was cut",
+                          "layout?": "only this layout"}),
         "get_block_properties": ("A block reference: block name, attributes, and dynamic block properties with their allowed values.",
                                  {"handle": "", "visible_only?": "default true"}),
     },
@@ -97,7 +107,7 @@ READ_GROUPS: dict[str, Group] = {
         "get_superelevation": ("Superelevation of an alignment: curves and critical stations with the slope of each lane and "
                                "shoulder (percent).", {"alignment": ""}),
         "list_intersections": ("Corridor intersections: name, location, corridor, number of roads.", {}),
-        "get_alignment_geometry": ("Every line, curve and spiral of an alignment in order: stations, length, start/end, direction; "
+        "get_alignment_geometry": ("Every line, curve and spiral of an alignment in order: stations, length, start/end, bearing (clockwise from north) and angle from east; "
                                    "curves with radius, delta, PI, tangent, external, chord; spirals with A, radius in/out, SPI. "
                                    "Also station equations, design speeds, and the parent(s) of an offset or connected alignment.",
                                    {"alignment": ""}),
@@ -107,8 +117,11 @@ READ_GROUPS: dict[str, Group] = {
         "get_material_volumes": ("Areas and volumes of a sample line group's material lists (see material_list_create): at each "
                                  "sample line cut/fill (earthwork) or material area, incremental and cumulative volume, and totals. "
                                  "Civil 3D's own quantity results when it has computed them (source civil3d); otherwise surface "
-                                 "materials are computed from the TINs across each sample line, average end area (source computed).",
-                                 {"alignment": "", "group": "", "material_list?": "default: all", "step?": "sampling step across the line, default 0.25"}),
+                                 "materials are computed from the TINs across each sample line, average end area (source computed). "
+                                 "Corridor earthwork: a material list with existing ground as base and the corridor surface as compare, "
+                                 "then from_station / to_station for one stretch (totals cover only the sample lines in that range).",
+                                 {"alignment": "", "group": "", "material_list?": "default: all", "step?": "sampling step across the line, default 0.25",
+                                  "from_station?": "only sample lines from this station", "to_station?": "only sample lines up to this station"}),
         "get_sections": ("Ground sections at the sample lines of an alignment: each TIN surface sampled along each sample line (every "
                          "surface breakpoint) as [offset, elevation], offsets from the alignment (negative = left). Needs no sampled "
                          "sources or section views. Corridor sections: get_corridor_section.",
@@ -239,7 +252,8 @@ LOCAL_ACTIONS: Group = {
     "help": ("This catalogue with every parameter. Pass topic to narrow it.", {"topic?": "an action or edit operation name"}),
     "check_layer_names": ("QA: layers whose names do not fully match a regular expression (e.g. the BEP layer convention).",
                           {"pattern": "regular expression", "skip_xref_layers?": "default true"}),
-    "check_default_names": ("QA: surfaces, alignments and networks still carrying Civil 3D's auto-generated names.", {}),
+    "check_default_names": ("QA: surfaces, alignments and networks still carrying Civil 3D's auto-generated names.",
+                            {"target?": "drawing target from get_drawing_info; defaults to the drawing read first"}),
     "sewergems_check": ("Read a Bentley SewerGEMS export and check it without drawing: manholes, conduits, drops, problems "
                         "(missing nodes, uphill pipes, crown above ground, ...) and the profile lines it would make.", SEWERGEMS_INPUT),
     "sewergems_import": ("Build a SewerGEMS export in the open drawing: a gravity network (manholes named as in SewerGEMS or the "
@@ -269,7 +283,8 @@ LOCAL_ACTIONS: Group = {
     "watergems_import": ("Build a WaterGEMS export in the open drawing as a pressure network: pipes at 'cover' below ground, "
                          "PRVs, tees and bends at the nodes, gate valves and service taps from CAD layers, plan labels with the real "
                          "material and size, then an alignment, ground profile and profile view per main. Needs edit permission.",
-                         {**WATERGEMS_INPUT, "target": "from get_drawing_info", "request_id": "one UUID for the import",
+                         {**{key: value for key, value in WATERGEMS_INPUT.items() if key != "target?"},
+                          "target": "from get_drawing_info", "request_id": "one UUID for the import",
                           "network?": "default 'Water'", "profile_views_at?": "[x,y], default 50 below the network",
                           "profile_view_gap?": "default 30", "profile_view_style?": "default 'Profile View'", "band_set?": "default auto: Standard when it has bands, else an Elevations band set (e.g. EG-FG Elevations and Stations), or a name",
                           "dry_run?": "validate the network transaction only"}),
@@ -286,8 +301,8 @@ EDIT_ACTION = (
     "dry_run aborts that transaction after validation and is not recorded under its request_id, so the same ID can be used "
     "for the real edit. File outputs run after commit. Editing requires permission for the "
     "target drawing. If the response is interrupted, check get_edit_status with the original target and request_id; "
-    "resend only with the same parameters and request ID for a retry. A request whose state is 'error' changed nothing "
-    "(for example Civil 3D was busy) and may be resent with the same request ID."
+    "if retryable is true, resend with the same parameters and request ID. If state is 'error' and retryable is false "
+    "or absent, inspect the drawing and receipt before attempting another edit."
 )
 
 LAYER_PROPS = {"color?": ACI, "on?": "", "frozen?": "", "locked?": "", "plot?": ""}
@@ -546,7 +561,9 @@ EDIT_GROUPS: dict[str, Group] = {
         "profile_create": ("Create a layout profile from PVIs on an alignment, with vertical curves where asked.",
                            {"alignment": "", "name": "", "pvis": PVIS, **PROFILE_STYLE}),
         "profile_pvis_set": ("Add, change (elevation and/or curve) or remove PVIs of a layout profile. A PVI within 0.001 of a given "
-                             "station is changed; otherwise one is added. curve: 'none' removes a curve.",
+                             "station is changed; otherwise one is added. Changing only the elevation keeps the PVI's vertical curve "
+                             "(curvesKept); give curve (or length / k / radius / lengths) to replace it, curve: 'none' to remove it. "
+                             "A curve that cannot be made fails the edit (nothing is applied).",
                              {"alignment": "", "profile": "", "pvis?": PVIS + "; elevation optional when changing", "remove?": "[station, ...]"}),
         "profile_from_surface": ("Create a surface (existing ground) profile.", {"alignment": "", "surface": "", "name": "", **PROFILE_STYLE}),
         "profile_derive": ("A profile from another object: a corridor feature line (kind corridor_feature_line), an offset alignment's "
@@ -566,6 +583,15 @@ EDIT_GROUPS: dict[str, Group] = {
         "profile_view_add_parts": ("Show network parts in a profile view.",
                                    {"profile_view": "", "pipe_network?": "gravity network name", "pressure_network?": "", "handles?": "individual parts",
                                     "pipe_names?": "filter gravity pipes by name", "structure_names?": "filter gravity structures by name"}),
+        "profile_view_labels_add": ("Label the network parts shown in a profile view: gravity pipes and structures, pressure pipes, "
+                                    "fittings and appurtenances. Parts already labelled in that view are skipped, so a re-run adds nothing. "
+                                    "Show parts first with profile_view_add_parts.",
+                                    {"profile_view": "", "pipe_network?": "only this gravity network (default: every network shown)",
+                                     "pressure_network?": "only this pressure network", "pipes?": "true", "structures?": "true",
+                                     "fittings?": "true", "appurtenances?": "true", "ratio?": "where along each pipe, 0-1 (default 0.5)",
+                                     "pipe_style?": "pipe_label style", "structure_style?": "structure_label style",
+                                     "pressure_pipe_style?": "pressure_pipe_label style", "fitting_style?": "pressure_fitting_label style",
+                                     "appurtenance_style?": "pressure_appurtenance_label style"}),
         "sample_lines_create": ("Create sample lines on an alignment (the group is created if missing).",
                                 {"alignment": "", "group": "", "stations?": "[station, ...]", "interval?": "every N along the alignment",
                                  "prefix?": "default 'SL-'", "left_width?": "m, default 20", "right_width?": "m, default 20"}),
@@ -658,13 +684,18 @@ EDIT_GROUPS: dict[str, Group] = {
                                 {"alignments": "list of names", "label_set": "see list_styles kind alignment_label_set", "style?": "", "layer?": ""}),
         "profile_view_set": ("Change a profile view: style, station range, elevation range.",
                              {"profile_view": "", "style?": "", "station_start?": "", "station_end?": "", "elevation_min?": "", "elevation_max?": ""}),
+        "style_copy": ("Copy a Civil 3D style under a new name, so the copy can be changed and the original kept (any kind list_styles "
+                       "knows: label, object, band, band set, ...).",
+                       {"kind": "as list_styles", "name": "existing style", "new_name": "", "if_exists?": "fail (default) | skip", "description?": ""}),
         "band_style_set": ("Change a band style's title and size (what the band writes at each station is set in Civil 3D's dialog).",
                            {"kind": "band_profile_data | band_pipe_network | ...", "name": "", "title?": "", "height?": "mm on paper",
                             "title_width?": "mm", "title_text_height?": "mm"}),
         "profile_view_bands": ("Replace the bands of a profile view: every band of a band set, or bands listed one by one "
                                "(each with an existing band style and its data source).",
                                {"profile_view": "", "band_set?": "a band set name, or auto (as profile_view_create); "
-                                "profile data bands get the alignment's first profile", "bottom?": "[{type: profile_data|pipe_network|horizontal_geometry|vertical_geometry, style, "
+                                "imported with Civil 3D's own band-set import; profile data bands left without data get the alignment's first profile",
+                                "rows?": "with band_set: data per imported row [{location?: bottom|top (default bottom), index: from 0, profile1?, profile2?, network?, gap?: mm}, ...]",
+                                "bottom?": "[{type: profile_data|pipe_network|horizontal_geometry|vertical_geometry, style, "
                                 "profile1?, profile2?, network?: gravity network (pipe_network bands), gap?: mm, label_start?, label_end?}, ...]",
                                 "top?": "same"}),
     },
@@ -775,7 +806,7 @@ def tool_description(mode: str = "all") -> str:
         return "\n".join(out)
     if mode in ("all", "read"):
         out.append("Work with the drawing open in Autodesk Civil 3D on this computer. Call with action=<name> and params={...}. "
-                   "Reading never changes anything. Parameters ending in ? are optional. action='help' returns every "
+                   "Reading never changes the drawing (show_objects changes only the view and selection). Parameters ending in ? are optional. action='help' returns every "
                    "parameter description.")
         out.append("\nREAD ACTIONS")
         out += _signatures(READ_GROUPS)

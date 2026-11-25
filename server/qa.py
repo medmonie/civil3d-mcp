@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from bridge_client import call
+from bridge_client import call, drawing_target
 
 # Names Civil 3D generates itself, e.g. "Surface1", "Alignment - (3)", "Pipe Network - (2)".
 DEFAULT_NAME_RX = re.compile(
@@ -38,7 +38,7 @@ def check_layer_names(pattern: str, skip_xref_layers: bool = True) -> dict[str, 
     }
 
 
-def check_default_names() -> dict[str, Any]:
+def check_default_names(target: Any = None) -> dict[str, Any]:
     flagged: dict[str, list[str]] = {}
     totals: dict[str, int] = {}
     truncated: list[str] = []
@@ -48,12 +48,17 @@ def check_default_names() -> dict[str, Any]:
         ("pipeNetworks", "list_pipe_networks", "pipeNetworks"),
         ("pressureNetworks", "list_pressure_networks", "pressureNetworks"),
     ):
-        data = call(method, {"limit": 5000})
+        params: dict[str, Any] = {"limit": 5000}
+        if target is not None:
+            params["target"] = target
+        data = call(method, params)
+        if target is None:
+            target = drawing_target(data)
         items = data[key]
         # 'total' counts every object even when the list was cut at 'limit'; fall back for actions without paging.
         totals[label] = data.get("total", len(items))
         if data.get("truncated"):
             truncated.append(label)
         flagged[label] = [i["name"] for i in items if DEFAULT_NAME_RX.match(i.get("name") or "")]
-    return {"totals": totals, "defaultNamed": flagged, "totalFlagged": sum(len(v) for v in flagged.values()),
+    return {"target": target, "totals": totals, "defaultNamed": flagged, "totalFlagged": sum(len(v) for v in flagged.values()),
             **({"truncated": truncated} if truncated else {})}

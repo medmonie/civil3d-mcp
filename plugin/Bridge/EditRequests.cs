@@ -10,7 +10,6 @@ internal static class EditRequests
     private const long MaxReplyBytes = 32 * 1024 * 1024;
     private static readonly object Gate = new();
     private static readonly Dictionary<Guid, Entry> Requests = new();
-    private static readonly Queue<Guid> Order = new();   // insertion order, for evicting the oldest finished entries
     private static readonly Queue<(Entry Entry, int Bytes)> Replies = new();
     private static long _replyBytes;
     private static int _active;   // edits (and dry runs) between arrival and reply; guarded by Gate
@@ -40,6 +39,7 @@ internal static class EditRequests
         public string? Workflow { get; } = workflow;
         public string Fingerprint { get; } = fingerprint;
         public string State { get; set; } = "pending";
+        public bool Retryable { get; set; }
         public bool? AfterCommitSucceeded { get; set; }
         public bool? Applied { get; set; }
         public string? Error { get; set; }
@@ -67,23 +67,20 @@ internal static class EditRequests
                     throw new ArgumentException("This request_id already identifies a different edit. Use its original parameters or submit a new edit with a new ID.");
                 if (existing.State != "error")
                     return existing.Result is JsonElement result ? result : Describe(id, existing);
-                // An edit that ended in an exception changed nothing: failures inside the batch are returned as
-                // results, and exceptions come from checks before the transaction or from a queue timeout before
-                // the work started. So the same request may run again, e.g. after Civil 3D was busy.
+                if (!existing.Retryable) return Describe(id, existing);
                 Enter();
                 existing.State = "pending";
                 existing.Error = null;
+                existing.Retryable = false;
                 entry = existing;
             }
             else
             {
-                if (Requests.Count >= MaxRequests) EvictOldestFinished();
                 if (Requests.Count >= MaxRequests)
-                    throw new InvalidOperationException("Too many MCP edits are still pending in this Civil 3D session. Try again shortly.");
+                    throw new InvalidOperationException("The edit history for this Civil 3D session is full. Restart Civil 3D and read the drawing before starting new edits.");
                 Enter();
                 entry = new Entry(target, fingerprint, StrParam(args, "workflow"));
                 Requests.Add(id, entry);
-                Order.Enqueue(id);
             }
         }
 
@@ -98,7 +95,8 @@ internal static class EditRequests
             {
                 lock (Gate)
                 {
-                    entry.State = "error";   // nothing was applied, so this request_id may be sent again
+                    entry.State = "error";
+                    entry.Retryable = ex is CadQueueTimeoutException;
                     entry.Error = ErrorText(ex);
                 }
                 throw;
@@ -151,22 +149,6 @@ internal static class EditRequests
         e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False
             ? v.GetBoolean() : null;
 
-    /// <summary>Drop the oldest 10% of finished entries (completed or error). Caller holds Gate. Pending ones stay.</summary>
-    private static void EvictOldestFinished()
-    {
-        int toDrop = Math.Max(1, MaxRequests / 10), scanned = 0, count = Order.Count;
-        while (toDrop > 0 && scanned++ < count)
-        {
-            var id = Order.Dequeue();
-            if (Requests.TryGetValue(id, out var e) && e.State != "pending")
-            {
-                Requests.Remove(id);
-                toDrop--;
-            }
-            else if (Requests.ContainsKey(id)) Order.Enqueue(id);   // still running: keep it, keep its place at the back
-        }
-    }
-
     public static object Status(JsonElement p)
     {
         var target = DrawingTarget.Read(p);
@@ -183,6 +165,7 @@ internal static class EditRequests
     {
         request_id = id,
         state = entry.State,
+        retryable = entry.Retryable,
         workflow = entry.Workflow,
         applied = entry.Applied,
         afterCommitSucceeded = entry.AfterCommitSucceeded,

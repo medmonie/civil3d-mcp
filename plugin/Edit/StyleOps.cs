@@ -11,6 +11,27 @@ internal static class StyleOps
         ops["profile_view_set"] = ProfileViewSet;
         ops["profile_view_bands"] = ProfileViewBands;
         ops["band_style_set"] = BandStyleSet;
+        ops["style_copy"] = StyleCopy;
+    }
+
+    /// <summary>Copy a Civil 3D style (any kind list_styles knows) under a new name, so the copy can be changed and the original kept.</summary>
+    private static object StyleCopy(EditContext c, JsonElement p)
+    {
+        string kind = NeedStr(p, "kind"), name = NeedStr(p, "name"), newName = NeedStr(p, "new_name");
+        if (SameName(name, newName)) throw new ArgumentException("style_copy: new_name must differ from name.");
+        var styles = Styles.Collection(c.Civ, kind);
+        var source = (CivilStyles.StyleBase)c.Tr.GetObject(Styles.Id(styles, name, kind + " style"), OpenMode.ForRead);
+        string ifExists = Choice(p, "if_exists", "fail", "fail", "skip");
+        ObjectId existing = ObjectId.Null;
+        try { existing = styles[newName]; } catch { /* free name */ }
+        if (!existing.IsNull)
+        {
+            if (ifExists == "skip") return new { kind, name, newName, copied = false, handle = H(existing), note = "a style with new_name already exists" };
+            throw new ArgumentException($"style_copy: a {kind} style '{newName}' already exists (if_exists: 'skip').");
+        }
+        var id = source.CopyAsSibling(newName);
+        if (StrParam(p, "description") is string d) ((CivilStyles.StyleBase)c.Tr.GetObject(id, OpenMode.ForWrite)).Description = d;
+        return new { kind, name, newName, copied = true, handle = H(id) };
     }
 
     /// <summary>The title and size of a band style. What the band writes at each station cannot be changed through the API.</summary>
@@ -198,6 +219,20 @@ internal static class StyleOps
     /// Replaces the bands of a profile view. Each band uses an existing band style (list_styles kind band_profile_data,
     /// band_pipe_network, ...) and its data: profile1 / profile2 for profile data bands, network for pipe network bands.
     /// </summary>
+    /// <summary>Fallback for band sets Civil 3D will not import: copy each band row (style and gap) of the set.</summary>
+    private static void CopyBandRows(CivilDb.ProfileView pv, CivilStyles.ProfileViewBandSetStyle set)
+    {
+        foreach (var (from, location) in new[] { (set.GetBottomBandSetItems(), Autodesk.Civil.BandLocationType.Bottom),
+                                                 (set.GetTopBandSetItems(), Autodesk.Civil.BandLocationType.Top) })
+        {
+            var items = new CivilDb.ProfileViewBandItemCollection(pv.ObjectId, location);
+            for (int i = 0; i < from.Count; i++) items.Add(from[i].BandStyleId);
+            for (int i = 0; i < from.Count; i++) items[i].Gap = from[i].Gap;
+            if (location == Autodesk.Civil.BandLocationType.Bottom) pv.Bands.SetBottomBandItems(items);
+            else pv.Bands.SetTopBandItems(items);
+        }
+    }
+
     private static object ProfileViewBands(EditContext c, JsonElement p)
     {
         var pv = FindProfileView(c.Civ, c.Tr, NeedStr(p, "profile_view"));
@@ -207,19 +242,39 @@ internal static class StyleOps
         if (StrParam(p, "band_set") is string setName)
         {
             // all the bands of a band set, each with its data (profile data bands get the alignment's first profile)
-            var set = (CivilStyles.ProfileViewBandSetStyle)c.Tr.GetObject(AlignmentOps.BandSetFor(c, setName), OpenMode.ForRead);
-            foreach (var (from, location) in new[] { (set.GetBottomBandSetItems(), Autodesk.Civil.BandLocationType.Bottom),
-                                                     (set.GetTopBandSetItems(), Autodesk.Civil.BandLocationType.Top) })
+            var setId = AlignmentOps.BandSetFor(c, setName);
+            var set = (CivilStyles.ProfileViewBandSetStyle)c.Tr.GetObject(setId, OpenMode.ForRead);
+            string method = "import";
+            try { pv.Bands.ImportBandSetStyle(setId); }   // Civil 3D's own band-set import (keeps gaps, offsets and settings)
+            catch (Exception ex)
             {
-                var items = new CivilDb.ProfileViewBandItemCollection(pv.ObjectId, location);
-                for (int i = 0; i < from.Count; i++) items.Add(from[i].BandStyleId);
-                for (int i = 0; i < from.Count; i++) items[i].Gap = from[i].Gap;
-                if (location == Autodesk.Civil.BandLocationType.Bottom) pv.Bands.SetBottomBandItems(items);
-                else pv.Bands.SetTopBandItems(items);
+                method = "copied rows";
+                c.Warn($"profile_view_bands: Civil 3D's band-set import failed ({ex.Message}); the band rows were copied instead.");
+                CopyBandRows(pv, set);
             }
-            var bands = AlignmentOps.FillBandData(c, pv, alignment);
-            if (bands.Count == 0) throw new ArgumentException($"profile_view_bands: band set '{set.Name}' has no bands.");
-            return new { profileView = pv.Name, bandSet = set.Name, bands };
+            // Data per row after the import, e.g. a different profile pair on the second profile data band.
+            var rows = Has(p, "rows") ? ArrParam(p, "rows", 40) : new List<JsonElement>();
+            foreach (var loc in new[] { Autodesk.Civil.BandLocationType.Bottom, Autodesk.Civil.BandLocationType.Top })
+            {
+                string where = loc == Autodesk.Civil.BandLocationType.Bottom ? "bottom" : "top";
+                var mine = rows.Where(r => (StrParam(r, "location") ?? "bottom").Equals(where, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (mine.Count == 0) continue;
+                var items = loc == Autodesk.Civil.BandLocationType.Bottom ? pv.Bands.GetBottomBandItems() : pv.Bands.GetTopBandItems();
+                foreach (var r in mine)
+                {
+                    int idx = (int)NeedDbl(r, "index");
+                    if (idx < 0 || idx >= items.Count) throw new ArgumentException($"profile_view_bands: {where} row {idx} does not exist (the band set has {items.Count} {where} bands, numbered from 0).");
+                    var item = items[idx];
+                    if (StrParam(r, "profile1") is string p1) item.Profile1Id = FindProfile(c.Tr, alignment, p1).ObjectId;
+                    if (StrParam(r, "profile2") is string p2) item.Profile2Id = FindProfile(c.Tr, alignment, p2).ObjectId;
+                    if (StrParam(r, "network") is string n) item.DataSourceId = FindPipeNetwork(c.Civ, c.Tr, n).ObjectId;
+                    if (DblParam(r, "gap") is double gap) item.Gap = gap / 1000.0;
+                }
+                if (loc == Autodesk.Civil.BandLocationType.Bottom) pv.Bands.SetBottomBandItems(items); else pv.Bands.SetTopBandItems(items);
+            }
+            var imported = AlignmentOps.FillBandData(c, pv, alignment);
+            if (imported.Count == 0) throw new ArgumentException($"profile_view_bands: band set '{set.Name}' has no bands.");
+            return new { profileView = pv.Name, bandSet = set.Name, method, bands = imported };
         }
         foreach (var (param, location) in new[] { ("bottom", Autodesk.Civil.BandLocationType.Bottom), ("top", Autodesk.Civil.BandLocationType.Top) })
         {

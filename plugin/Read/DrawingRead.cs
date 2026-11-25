@@ -227,20 +227,46 @@ internal static class DrawingRead
             catch { return false; }   // no extents: cannot be inside a window
         }
 
-        return WithRead((db, tr) =>
+        string? block = StrParam(p, "block"), path = StrParam(p, "path"), layout = StrParam(p, "layout");
+        if (block != null && layout != null) throw new ArgumentException("list_entities: give block or layout, not both.");
+
+        object Body(Database db, Transaction tr)
         {
+            BlockTableRecord space;
+            object? blockInfo = null;
+            if (block != null)
+            {
+                var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForRead);
+                if (!bt.Has(block)) throw new ArgumentException($"list_entities: no block '{block}'" + (path != null ? $" in {path}." : " in the drawing (list_blocks)."));
+                space = (BlockTableRecord)tr.GetObject(bt[block], OpenMode.ForRead);
+                if (space.IsLayout) throw new ArgumentException($"list_entities: '{block}' is a layout; use layout instead.");
+                blockInfo = new { name = space.Name, origin = P3(space.Origin), units = space.Units.ToString(),
+                                  xref = space.IsFromExternalReference, note = "coordinates as stored in the block definition; an insert puts 'origin' (the base point) at its insertion point" };
+            }
+            else space = SpaceOf(db, tr, layout);
             // The DXF type is checked on the id, so entities of other types are never opened.
-            var matches = SpaceOf(db, tr, StrParam(p, "layout")).Cast<ObjectId>()
+            var matches = space.Cast<ObjectId>()
                 .Where(id => type == null || SameName(DxfOrName(id), type))
                 .Select(id => tr.GetObject(id, OpenMode.ForRead) as Entity)
                 .Where(ent => ent != null && (layer == null || SameName(ent.Layer, layer)) && InWindow(ent));
-            return Paged("entities", matches, limit, ent => new
+            var page = Paged("entities", matches, limit, ent => new
             {
                 handle = H(ent!.ObjectId), type = DxfOrName(ent.ObjectId), layer = ent.Layer, color = ent.Color.ToString(),
                 civilName = ent is CivilDb.Entity ce ? Safe(() => ce.Name) : null,
                 geometry = Safe(() => Geometry(tr, ent)),
             });
-        });
+            if (path != null) { page["file"] = path; page["units"] = db.Insunits.ToString(); }
+            if (blockInfo != null) page["block"] = blockInfo;
+            return page;
+        }
+
+        if (path == null) return WithRead(Body);
+        // A drawing on disk, read without opening it in the editor (e.g. a standard manhole or basin detail).
+        using var side = BlockOps.ReadSide(path, "list_entities");
+        using var str = side.TransactionManager.StartTransaction();
+        var result = Body(side, str);
+        str.Commit();
+        return result;
     }
 
     public static object ListBlocks(JsonElement p)

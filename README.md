@@ -1,6 +1,6 @@
 # Civil 3D MCP bridge
 
-**Version 0.20 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
+**Version 0.22 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
 
 Lets Claude, ChatGPT and other MCP clients read the open Civil 3D drawing and edit it after you grant permission in Civil 3D.
 It covers:
@@ -43,8 +43,13 @@ release and Civil 3D loads the one that matches it.
 2. Unzip `C3dMcp.zip` and double-click **`install.bat`**. It copies
    - the plugin to `%APPDATA%\Autodesk\ApplicationPlugins\C3dMcpBridge.bundle` (Civil 3D loads it by itself),
    - the server to `%LOCALAPPDATA%\C3dMcpBridge\c3d-mcp-server.exe`,
-   - and saves `claude_desktop_config_snippet.json` and `codex_mcp_config_snippet.toml` next to the server.
-3. Connect your MCP client (next section).
+   - and saves `claude_desktop_config_snippet.json` and `codex_mcp_config_snippet.toml` next to the server,
+   - then adds (or updates) `civil3d` in the clients it finds for you: Claude Desktop (classic install and the
+     Microsoft Store / MSIX install, whose config is under `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude`)
+     and Codex (`~/.codex/config.toml`). Other servers and settings are kept, each file is backed up
+     (`*.bak-<date>`), and a file that is not valid JSON is left alone. It lists what it changed.
+3. Fully quit and restart your MCP client. Connect it by hand (next section) only if the installer listed it as
+   NOT CHANGED or not found, or for the ChatGPT desktop app.
 4. Start Civil 3D and open a drawing. If Civil 3D asks whether to load `C3dMcpBridge.dll`, verify the path and publisher
    details, then choose **Always Load**. Run **`MCPSTATUS`** in the Civil 3D command line.
 5. In a chat, ask *“Ping Civil 3D and tell me which drawing is open.”*
@@ -52,7 +57,10 @@ release and Civil 3D loads the one that matches it.
 ### Connect your MCP client
 
 **Claude Desktop.** **Settings > Developer > Edit Config**, then add the block from `claude_desktop_config_snippet.json`
-to `claude_desktop_config.json` (merge it into an existing `mcpServers` section if there is one):
+to `claude_desktop_config.json`. If the file already has an `mcpServers` section, add only the `"civil3d": {...}` line
+inside it: a second `mcpServers` block makes the file invalid. The Microsoft Store version of Claude Desktop reads the
+file under `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude`, not `%APPDATA%\Claude`;
+**Edit Config** opens the right one.
 
 ```json
 {
@@ -238,7 +246,7 @@ sheet: `layout_from_template` (your office template's layout with its title bloc
 
 ## 4. Features
 
-One tool, `civil3d(action, params)`: 71 read actions, 9 QA / help / import / sheet actions, and 130 edit operations inside the
+One tool, `civil3d(action, params)`: 72 read actions, 9 QA / help / import / sheet actions, and 132 edit operations inside the
 single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTIONS.md)** and by `action="help"`.
 
 **Facts and actions, not design rules.** The MCP reads and changes the drawing; it does not judge a design. Reads return
@@ -532,6 +540,9 @@ is predictable: `list_pressure_pipes` is in `Read/PressureRead.cs`, `pressure_ad
 | All edit operations, live | `tests\run_live_edit.bat` | `tests\results\live_edit.txt`, ends with `ALL PASS` |
 | Audit checks (changed edit operations, D records), live | `tests\run_audit.bat` | `tests\results\audit.txt` |
 | Fixes 35-42 (labels, block import, assembly, clashes, solids file), live | `tests\run_fixes.bat` | `tests\results\fixes.txt` |
+| 0.21 features (show_objects, profile view labels, earthwork by station range), live | `tests\run_next.bat` | `tests\results\next.txt` |
+| MCP protocol (stdio handshake, stale target, dry run, rollback, replay), live on an empty Drawing1 | `tests\run_protocol.bat` | `tests\results\protocol.txt` |
+| 0.22 (bearings, H5 vertical curves, inspect_file budget, block / other-DWG reads, style_copy, band-set import), live | `tests\run_v022.bat` | `tests\results\v022.txt` |
 | MCP transport through a real client (permission dialog, busy ping, Civil 3D closed) | `tests\run_transport_edit.bat` / `_loop` / `_down` | `tests\results\transport_*.txt` |
 | Import retries (SewerGEMS / WaterGEMS) | `tests\run_imports_sewer.bat` / `_water` | `tests\results\imports_*.txt` |
 | Python environment + offline test | `setup_server.bat` | `setup_result.txt` |

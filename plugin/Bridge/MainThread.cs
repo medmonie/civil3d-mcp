@@ -2,6 +2,9 @@ using Autodesk.AutoCAD.ApplicationServices;
 
 namespace C3dMcpBridge;
 
+/// <summary>The queued operation timed out before its delegate began executing.</summary>
+internal sealed class CadQueueTimeoutException(string message) : TimeoutException(message);
+
 /// <summary>
 /// The Civil 3D / AutoCAD API is not thread-safe, and in 2027 even touching DocumentCollection from another
 /// thread throws "The calling thread cannot access this object because a different thread owns it".
@@ -59,7 +62,7 @@ internal static class MainThread
         catch (TimeoutException)
         {
             if (Interlocked.CompareExchange(ref state, 2, 0) == 0)
-                throw new TimeoutException(
+                throw new CadQueueTimeoutException(
                     $"Civil 3D did not become available within {timeout.TotalSeconds:0}s " +
                     "(a command, dialog or long regen is probably active). Request cancelled.");
 

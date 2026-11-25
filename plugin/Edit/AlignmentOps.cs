@@ -10,6 +10,7 @@ internal static class AlignmentOps
         ops["profile_from_surface"] = ProfileFromSurface;
         ops["profile_view_create"] = ProfileViewCreate;
         ops["profile_view_add_parts"] = ProfileViewAddParts;
+        ops["profile_view_labels_add"] = ProfileViewLabelsAdd;
         ops["sample_lines_create"] = SampleLinesCreate;
         ops["section_views_create"] = SectionViewsCreate;
         ops["sample_sources_set"] = SampleSourcesSet;
@@ -86,7 +87,8 @@ internal static class AlignmentOps
     // ---------------------------------------------------------------- profiles
 
     /// <summary>A PVI as given: [station, elevation] or {station, elevation, curve?, length?, k?, radius?, lengths?}.</summary>
-    internal sealed record PviSpec(double Station, double? Elevation, string Curve, double? Length, double? K, double? Radius, double[]? Lengths);
+    internal sealed record PviSpec(double Station, double? Elevation, string Curve, double? Length, double? K, double? Radius, double[]? Lengths,
+                                   bool CurveGiven = false);
 
     internal static List<PviSpec> ParsePvis(JsonElement p, string name, string op, bool needElevation = true) =>
         ArrParam(p, name, 5000).Select((e, i) =>
@@ -105,7 +107,8 @@ internal static class AlignmentOps
             if (lens != null && lens.Length != 2) throw new ArgumentException($"{op}: pvi {i + 1}: 'lengths' is [length before, length after].");
             string curve = Choice(e, "curve", lens != null ? "asymmetric" : Has(e, "radius") ? "circular" : (Has(e, "length") || Has(e, "k")) ? "parabola" : "none",
                                   "none", "parabola", "circular", "asymmetric");
-            var spec = new PviSpec(st, el, curve, PositiveParam(e, "length"), PositiveParam(e, "k"), PositiveParam(e, "radius"), lens);
+            bool given = Has(e, "curve") || lens != null || Has(e, "radius") || Has(e, "length") || Has(e, "k");
+            var spec = new PviSpec(st, el, curve, PositiveParam(e, "length"), PositiveParam(e, "k"), PositiveParam(e, "radius"), lens, given);
             if (curve == "parabola" && spec.Length == null && spec.K == null) throw new ArgumentException($"{op}: pvi {i + 1}: a parabola needs 'length' or 'k'.");
             if (curve == "circular" && spec.Radius == null && spec.Length == null) throw new ArgumentException($"{op}: pvi {i + 1}: a circular curve needs 'radius'.");
             if (curve == "asymmetric" && lens == null) throw new ArgumentException($"{op}: pvi {i + 1}: an asymmetric parabola needs 'lengths'.");
@@ -146,8 +149,9 @@ internal static class AlignmentOps
             }
             catch (Exception ex)
             {
-                if (FindPvi(pr, st) == null) pr.PVIs.AddPVI(st, el);   // put the plain PVI back
-                c.Warn($"no {v.Curve} curve at station {R3(st)}: {ex.Message}");
+                // The curve was asked for explicitly: fail the operation so the whole batch rolls back, rather than
+                // committing a profile without the requested geometry.
+                throw new InvalidOperationException($"no {v.Curve} curve could be made at station {R3(st)}: {ex.Message}", ex);
             }
         }
         return done;
@@ -182,6 +186,62 @@ internal static class AlignmentOps
         return new { alignment = al.Name, profile = name, handle = H(id), pvis = pvis.Count, curves };
     }
 
+    /// <summary>A PVI with its vertical curve, enough to put it back exactly.</summary>
+    private sealed record PviSnapshot(double Station, double Elevation, string Curve, double A, double B);
+
+    private static List<PviSnapshot> Snapshot(CivilDb.Profile pr)
+    {
+        var list = new List<PviSnapshot>();
+        for (int i = 0; i < pr.PVIs.Count; i++)
+        {
+            var v = pr.PVIs[i];
+            var snap = v.VerticalCurve switch
+            {
+                CivilDb.ProfileParabolaSymmetric sp => new PviSnapshot(v.Station, v.Elevation, "parabola", sp.Length, 0),
+                CivilDb.ProfileParabolaAsymmetric ap => new PviSnapshot(v.Station, v.Elevation, "asymmetric", ap.AsymmetricLength1, ap.AsymmetricLength2),
+                CivilDb.ProfileCircular cc => new PviSnapshot(v.Station, v.Elevation, "circular", cc.Radius, 0),
+                _ => new PviSnapshot(v.Station, v.Elevation, "none", 0, 0),
+            };
+            list.Add(snap);
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Put a profile's PVIs and curves back as they were. Civil 3D does not undo PVI changes when the transaction is
+    /// aborted, so a failed profile edit restores the profile itself before the batch rolls back.
+    /// </summary>
+    private static void Restore(CivilDb.Profile pr, List<PviSnapshot> snap)
+    {
+        // Civil 3D will not remove a profile's first or last PVI, so restore by difference: drop PVIs that were not
+        // there, add back the missing ones, fix elevations, then rebuild every PVI whose curve differs.
+        bool Known(double st) => snap.Any(v => Math.Abs(v.Station - st) < 1e-3);
+        for (int i = pr.PVIs.Count - 2; i >= 1; i--)
+            if (!Known(pr.PVIs[i].Station)) pr.PVIs.RemoveAt(i);
+        foreach (var v in snap)
+        {
+            var cur = FindPvi(pr, v.Station);
+            if (cur == null) pr.PVIs.AddPVI(v.Station, v.Elevation);
+            else if (Math.Abs(cur.Elevation - v.Elevation) > 1e-9) cur.Elevation = v.Elevation;
+        }
+        var now = Snapshot(pr);
+        foreach (var v in snap)
+        {
+            var cur = now.FirstOrDefault(n => Math.Abs(n.Station - v.Station) < 1e-3);
+            if (cur != null && cur.Curve == v.Curve && Math.Abs(cur.A - v.A) < 1e-6 && Math.Abs(cur.B - v.B) < 1e-6) continue;
+            var pvi = FindPvi(pr, v.Station);
+            if (pvi == null) continue;
+            pr.PVIs.RemoveAt(pvi.Station, pvi.Elevation);
+            switch (v.Curve)
+            {
+                case "parabola": pr.PVIs.AddPVISymParabola(v.Station, v.Elevation, v.A); break;
+                case "asymmetric": pr.PVIs.AddPVIAsymParabola(v.Station, v.Elevation, v.A, v.B); break;
+                case "circular": pr.PVIs.AddPVIArc(v.Station, v.Elevation, v.A); break;
+                default: pr.PVIs.AddPVI(v.Station, v.Elevation); break;
+            }
+        }
+    }
+
     /// <summary>Add, change or remove PVIs of a layout profile, with or without vertical curves.</summary>
     private static object ProfilePvisSet(EditContext c, JsonElement p)
     {
@@ -189,6 +249,15 @@ internal static class AlignmentOps
         var pr = FindProfile(c.Tr, al, NeedStr(p, "profile"), OpenMode.ForWrite);
         if (pr.ProfileType != CivilDb.ProfileType.FG)
             throw new ArgumentException($"profile_pvis_set: '{pr.Name}' is a {pr.ProfileType} profile; only layout profiles have editable PVIs.");
+        // Civil 3D does not undo PVI changes when the transaction aborts: if this batch fails (here or in a later
+        // operation) or is a dry run, the engine puts the profile back from this snapshot before aborting.
+        var before = Snapshot(pr);
+        c.BeforeAbort.Add(() => Restore(pr, before));
+        return PvisSetBody(c, p, al, pr);
+    }
+
+    private static object PvisSetBody(EditContext c, JsonElement p, CivilDb.Alignment al, CivilDb.Profile pr)
+    {
         var removed = new List<double>();
         foreach (double st in Has(p, "remove") ? NumList(p, "remove", 5000) : new List<double>())
         {
@@ -198,15 +267,30 @@ internal static class AlignmentOps
         }
         var specs = ParsePvis(p, "pvis", "profile_pvis_set", needElevation: false);
         int added = 0, changed = 0;
+        var kept = new List<object>();
         foreach (var v in specs)
         {
             if (!OnAlignment(al, v.Station)) throw new ArgumentException($"profile_pvis_set: station {v.Station} is off the alignment ({StationRange(al)}).");
             var pvi = FindPvi(pr, v.Station);
             if (pvi != null)
             {
-                double el = v.Elevation ?? pvi.Elevation;
-                pr.PVIs.RemoveAt(pvi.Station, pvi.Elevation);   // also drops any curve; ApplyCurves puts the requested one back
-                pr.PVIs.AddPVI(v.Station, el);
+                if (v.CurveGiven)
+                {
+                    // A curve (or curve: none) was asked for: rebuild the PVI plain; ApplyCurves adds the requested curve.
+                    double el = v.Elevation ?? pvi.Elevation;
+                    pr.PVIs.RemoveAt(pvi.Station, pvi.Elevation);
+                    pr.PVIs.AddPVI(v.Station, el);
+                }
+                else if (v.Elevation is double el)
+                {
+                    // Elevation only: move the PVI in place, so its vertical curve (parabola, asymmetric or circular) stays.
+                    var before = pvi.VerticalCurve != null ? pvi.PVIType.ToString() : null;
+                    pvi.Elevation = el;
+                    var after = FindPvi(pr, v.Station);
+                    if (before != null && (after == null || after.VerticalCurve == null))
+                        throw new InvalidOperationException($"profile_pvis_set: the {before} curve at station {R3(v.Station)} would be lost by this elevation; give its curve explicitly.");
+                    if (before != null) kept.Add(new { station = R3(v.Station), curve = before });
+                }
                 changed++;
             }
             else
@@ -217,7 +301,7 @@ internal static class AlignmentOps
             }
         }
         var curves = ApplyCurves(c, pr, specs);
-        return new { alignment = al.Name, profile = pr.Name, added, changed, removed, curves, pvis = pr.PVIs.Count };
+        return new { alignment = al.Name, profile = pr.Name, added, changed, removed, curves, curvesKept = kept, pvis = pr.PVIs.Count };
     }
 
     private static object ProfileFromSurface(EditContext c, JsonElement p)
@@ -301,7 +385,9 @@ internal static class AlignmentOps
                     changed = true;
                 }
                 report.Add(new { location = location.ToString().ToLowerInvariant(), type = item.BandType.ToString(),
-                                 style = Styles.NameOf(c.Tr, item.BandStyleId) });
+                                 style = Styles.NameOf(c.Tr, item.BandStyleId),
+                                 profile1 = Safe(() => item.Profile1Id.IsNull ? null : ((CivilDb.Profile)c.Tr.GetObject(item.Profile1Id, OpenMode.ForRead)).Name),
+                                 profile2 = Safe(() => item.Profile2Id.IsNull ? null : ((CivilDb.Profile)c.Tr.GetObject(item.Profile2Id, OpenMode.ForRead)).Name) });
             }
             if (!changed) continue;
             if (location == Autodesk.Civil.BandLocationType.Bottom) pv.Bands.SetBottomBandItems(items);
@@ -354,6 +440,113 @@ internal static class AlignmentOps
             }
         }
         return new { profileView = pv.Name, partsAdded = added };
+    }
+
+    /// <summary>
+    /// Labels the network parts shown in a profile view: gravity pipes and structures, pressure pipes, fittings and
+    /// appurtenances. A part that already has a label of that kind in this view is skipped, so a re-run adds nothing.
+    /// </summary>
+    private static object ProfileViewLabelsAdd(EditContext c, JsonElement p)
+    {
+        const string op = "profile_view_labels_add";
+        var pv = FindProfileView(c.Civ, c.Tr, NeedStr(p, "profile_view"));
+        double ratio = DblParam(p, "ratio") ?? 0.5;
+        if (ratio < 0 || ratio > 1) throw new ArgumentException($"{op}: 'ratio' (where along a pipe the label sits) must be 0 to 1.");
+        string? gravityName = StrParam(p, "pipe_network"), pressureName = StrParam(p, "pressure_network");
+        bool all = gravityName == null && pressureName == null;
+
+        // Parts that already have a label in this view, by part and by its profile-view part
+        // (part profile labels live in model space; their ViewId is the profile view, their FeatureId the part)
+        var labelled = new HashSet<ObjectId>();
+        var labelClasses = new[] { typeof(CivilDb.PartProfileLabel), typeof(CivilDb.PressurePartProfileLabel) }
+            .Select(Autodesk.AutoCAD.Runtime.RXObject.GetClass).ToList();
+        foreach (ObjectId lid in ModelSpace(c.Db, c.Tr, OpenMode.ForRead))
+        {
+            if (lid.IsErased || !labelClasses.Any(cls => lid.ObjectClass.IsDerivedFrom(cls))) continue;
+            if (c.Tr.GetObject(lid, OpenMode.ForRead) is CivilDb.LabelBase l && l.ViewId == pv.ObjectId && !l.FeatureId.IsNull) labelled.Add(l.FeatureId);
+        }
+        bool Has(ObjectId part, ObjectId viewPart) => labelled.Contains(part) || (!viewPart.IsNull && labelled.Contains(viewPart));
+        bool Shown(ObjectIdCollection views) => views.Cast<ObjectId>().Contains(pv.ObjectId);
+
+        ObjectId Style(string key, Func<CivilDoc, CivilStyles.StyleCollectionBase> styles, string what) =>
+            Styles.Id(styles(c.Civ), StrParam(p, key), what);
+        var used = new Dictionary<string, string>();
+        int pipes = 0, structures = 0, pPipes = 0, fittings = 0, appurtenances = 0, skipped = 0, notShown = 0;
+
+        var gravity = new List<CivilDb.Network>();
+        if (gravityName != null) gravity.Add(FindPipeNetwork(c.Civ, c.Tr, gravityName));
+        else if (all) foreach (ObjectId id in c.Civ.GetPipeNetworkIds()) gravity.Add((CivilDb.Network)c.Tr.GetObject(id, OpenMode.ForRead));
+        var pressure = new List<CivilDb.PressurePipeNetwork>();
+        if (pressureName != null) pressure.Add(FindPressureNetwork(c.Civ, c.Tr, pressureName));
+        else if (all) foreach (var id in PressureNetworkIds(c.Civ)) pressure.Add((CivilDb.PressurePipeNetwork)c.Tr.GetObject(id, OpenMode.ForRead));
+
+        ObjectId? pipeStyle = null, structureStyle = null, pPipeStyle = null, fittingStyle = null, appStyle = null;
+        foreach (var net in gravity)
+        {
+            if (BoolParam(p, "pipes") ?? true)
+                foreach (ObjectId id in net.GetPipeIds())
+                {
+                    var part = (CivilDb.Part)c.Tr.GetObject(id, OpenMode.ForRead);
+                    if (!Shown(part.GetProfileViewsDisplayingMe())) { if (!all) notShown++; continue; }
+                    if (Has(id, part.ProfileViewPartId)) { skipped++; continue; }
+                    pipeStyle ??= Style("pipe_style", civ => civ.Styles.LabelStyles.PipeLabelStyles.PlanProfileLabelStyles, "pipe label style");
+                    CivilDb.PipeProfileLabel.Create(part.ProfileViewPartId, pv.ObjectId, ratio, pipeStyle.Value);
+                    pipes++;
+                }
+            if (BoolParam(p, "structures") ?? true)
+                foreach (ObjectId id in net.GetStructureIds())
+                {
+                    var part = (CivilDb.Part)c.Tr.GetObject(id, OpenMode.ForRead);
+                    if (!Shown(part.GetProfileViewsDisplayingMe())) { if (!all) notShown++; continue; }
+                    if (Has(id, part.ProfileViewPartId)) { skipped++; continue; }
+                    structureStyle ??= Style("structure_style", civ => civ.Styles.LabelStyles.StructureLabelStyles.LabelStyles, "structure label style");
+                    CivilDb.StructureProfileLabel.Create(pv.ObjectId, part.ProfileViewPartId, structureStyle.Value);
+                    structures++;
+                }
+        }
+        foreach (var net in pressure)
+        {
+            void Each(ObjectIdCollection ids, string flag, Action<CivilDb.PressurePart> make)
+            {
+                if (!(BoolParam(p, flag) ?? true)) return;
+                foreach (ObjectId id in ids)
+                {
+                    var part = (CivilDb.PressurePart)c.Tr.GetObject(id, OpenMode.ForRead);
+                    if (!Shown(part.GetProfileViewsDisplayingMe())) { if (!all) notShown++; continue; }
+                    if (Has(id, part.ProfileViewPartId)) { skipped++; continue; }
+                    make(part);
+                }
+            }
+            Each(net.GetPipeIds(), "pipes", part =>
+            {
+                pPipeStyle ??= Style("pressure_pipe_style", Styles.PressurePipeLabels, "pressure pipe label style");
+                CivilDb.PressurePipeProfileLabel.Create(part.ProfileViewPartId, pv.ObjectId, ratio, pPipeStyle.Value);
+                pPipes++;
+            });
+            Each(net.GetFittingIds(), "fittings", part =>
+            {
+                fittingStyle ??= Style("fitting_style", Styles.PressureFittingLabels, "pressure fitting label style");
+                CivilDb.PressureFittingProfileLabel.Create(part.ProfileViewPartId, pv.ObjectId, 0.5, Vector3d.YAxis, fittingStyle.Value);
+                fittings++;
+            });
+            Each(net.GetAppurtenanceIds(), "appurtenances", part =>
+            {
+                appStyle ??= Style("appurtenance_style", Styles.PressureAppurtenanceLabels, "pressure appurtenance label style");
+                CivilDb.PressureAppurtenanceProfileLabel.Create(part.ProfileViewPartId, pv.ObjectId, 0.5, Vector3d.YAxis, appStyle.Value);
+                appurtenances++;
+            });
+        }
+        foreach (var (k, v) in new[] { ("pipe", pipeStyle), ("structure", structureStyle), ("pressurePipe", pPipeStyle), ("fitting", fittingStyle), ("appurtenance", appStyle) })
+            if (v is ObjectId sid) used[k] = Styles.NameOf(c.Tr, sid);
+        if (notShown > 0)
+            c.Warn($"{op}: {notShown} part(s) of the named network are not shown in '{pv.Name}' and were not labelled; add them with profile_view_add_parts.");
+        if (pipes + structures + pPipes + fittings + appurtenances == 0 && skipped == 0)
+            c.Warn($"{op}: no network part is shown in '{pv.Name}'. Add parts with profile_view_add_parts first.");
+        return new
+        {
+            profileView = pv.Name, pipeLabels = pipes, structureLabels = structures, pressurePipeLabels = pPipes,
+            fittingLabels = fittings, appurtenanceLabels = appurtenances, alreadyLabelled = skipped, stylesUsed = used,
+        };
     }
 
     // ---------------------------------------------------------------- sample lines and section views
