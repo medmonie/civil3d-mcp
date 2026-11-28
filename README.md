@@ -1,6 +1,6 @@
 # Civil 3D MCP bridge
 
-**Version 0.22 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
+**Version 0.24 · Autodesk Civil 3D 2024 / 2025 / 2027 · Windows**
 
 Lets Claude, ChatGPT and other MCP clients read the open Civil 3D drawing and edit it after you grant permission in Civil 3D.
 It covers:
@@ -39,17 +39,22 @@ Needs Civil 3D 2024, 2025 or 2027 and an MCP client: Claude Desktop, the ChatGPT
 MCP server; no Python or .NET SDK is needed. One zip serves all three releases: the bundle holds a plugin DLL per
 release and Civil 3D loads the one that matches it.
 
-1. Close Civil 3D.
-2. Unzip `C3dMcp.zip` and double-click **`install.bat`**. It copies
+1. Close Civil 3D and **quit Claude Desktop completely** (tray icon > Quit). Claude keeps its settings in memory and
+   writes them back over a change made while it runs, so `install.bat` stops while it is open (`install.bat /claude_open`
+   installs anyway).
+2. Unzip `C3dMcp.zip` and double-click **`install.bat`** (no "Run as administrator"). It copies
    - the plugin to `%APPDATA%\Autodesk\ApplicationPlugins\C3dMcpBridge.bundle` (Civil 3D loads it by itself),
    - the server to `%LOCALAPPDATA%\C3dMcpBridge\c3d-mcp-server.exe`,
    - and saves `claude_desktop_config_snippet.json` and `codex_mcp_config_snippet.toml` next to the server,
-   - then adds (or updates) `civil3d` in the clients it finds for you: Claude Desktop (classic install and the
-     Microsoft Store / MSIX install, whose config is under `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude`)
-     and Codex (`~/.codex/config.toml`). Other servers and settings are kept, each file is backed up
-     (`*.bak-<date>`), and a file that is not valid JSON is left alone. It lists what it changed.
-3. Fully quit and restart your MCP client. Connect it by hand (next section) only if the installer listed it as
-   NOT CHANGED or not found, or for the ChatGPT desktop app.
+   - then the server exe itself (`--configure-clients`, no PowerShell script, so company policies that block scripts
+     do not stop it) adds or updates `civil3d` in every Claude Desktop settings file it finds:
+     `%LOCALAPPDATA%\Claude-Data\claude_*\claude_desktop_config.json` (the file Claude Desktop 6.x reads),
+     `%APPDATA%\Claude` (classic install) and `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude` (older
+     Store app), and in Codex (`~/.codex/config.toml`). Other servers and settings are kept, an existing civil3d
+     entry keeps its args and env (e.g. `--read-only`), each file is backed up (`*.bak-<id>`) and read back, and a file
+     that is not valid JSON is left alone. It lists what it changed; the log is `install_result.txt` next to it.
+3. Start Claude Desktop / Codex again. Connect a client by hand (next section) only if the installer listed it as
+   FAILED or not installed, or for the ChatGPT desktop app.
 4. Start Civil 3D and open a drawing. If Civil 3D asks whether to load `C3dMcpBridge.dll`, verify the path and publisher
    details, then choose **Always Load**. Run **`MCPSTATUS`** in the Civil 3D command line.
 5. In a chat, ask *“Ping Civil 3D and tell me which drawing is open.”*
@@ -58,9 +63,9 @@ release and Civil 3D loads the one that matches it.
 
 **Claude Desktop.** **Settings > Developer > Edit Config**, then add the block from `claude_desktop_config_snippet.json`
 to `claude_desktop_config.json`. If the file already has an `mcpServers` section, add only the `"civil3d": {...}` line
-inside it: a second `mcpServers` block makes the file invalid. The Microsoft Store version of Claude Desktop reads the
-file under `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude`, not `%APPDATA%\Claude`;
-**Edit Config** opens the right one.
+inside it: a second `mcpServers` block makes the file invalid. Claude Desktop 6.x reads
+`%LOCALAPPDATA%\Claude-Data\claude_*\claude_desktop_config.json`, not `%APPDATA%\Claude`; **Edit Config** opens the
+right one. Quit Claude completely before editing the file by hand, or it may write its old settings back.
 
 ```json
 {
@@ -77,8 +82,24 @@ executable path printed by the installer as the command, with no arguments. If `
 command. Save and select **Restart** when prompted. In a local chat, `/mcp` shows whether it is enabled.
 See [OpenAI’s MCP setup guide](https://learn.chatgpt.com/docs/extend/mcp).
 
-**Codex CLI / IDE.** Add the table from `codex_mcp_config_snippet.toml` to `~/.codex/config.toml` (update the existing
-`[mcp_servers.civil3d]` table if present). The ChatGPT desktop app and Codex share this configuration.
+**Codex CLI / IDE.** The installer writes this for you; by hand, add the tables from `codex_mcp_config_snippet.toml` to
+`~/.codex/config.toml` (update the existing `[mcp_servers.civil3d]` table if present):
+
+```toml
+[mcp_servers.civil3d]
+command = "C:\\Users\\<you>\\AppData\\Local\\C3dMcpBridge\\c3d-mcp-server.exe"
+
+[mcp_servers.civil3d.env]
+C3D_MCP_SPLIT = "1"
+```
+
+`C3D_MCP_SPLIT = "1"` gives Codex separate `civil3d_read`, `civil3d_edit` and `civil3d_import` tools, so you can
+allow reads without allowing edits (the CSI MCP servers do the same). The ChatGPT desktop app and Codex share this
+configuration.
+
+**Smaller tool description (optional).** The tool description lists every action with its parameters (about 52 KB,
+sent with every message). Set `C3D_MCP_COMPACT = "1"` in the server's `env` (Claude Desktop: `"env": {"C3D_MCP_COMPACT": "1"}`
+in the civil3d entry) to list names only (about 12 %); the client then calls `help` with the names it needs.
 
 ### Option B - from this source folder (the development PC)
 
@@ -118,21 +139,19 @@ This setup starts the server with `--read-only`, which exposes `civil3d_read` an
    associated with your ChatGPT workspace. Obtain a runtime key with tunnel access and download the
    [Windows tunnel client](https://github.com/openai/tunnel-client/releases/latest). The workspace must allow custom MCP servers.
 2. Open Civil 3D with a drawing and run `MCPSTATUS`. In PowerShell on the same PC and under the same Windows account,
-   run the following with `tunnel-client.exe` on your `PATH`:
+   with `tunnel-client.exe` on your `PATH`, let the server start the tunnel (read-only):
 
    ```powershell
-   $serverExe = (Join-Path $env:LOCALAPPDATA 'C3dMcpBridge\c3d-mcp-server.exe').Replace('\', '/')
-   $env:MCP_COMMAND = '"{0}" --read-only' -f $serverExe
    $env:CONTROL_PLANE_TUNNEL_ID = Read-Host 'Tunnel ID'
    $runtimeKey = Read-Host 'Tunnel runtime API key' -AsSecureString
    $env:CONTROL_PLANE_API_KEY = [pscredential]::new('tunnel', $runtimeKey).GetNetworkCredential().Password
-   try {
-       tunnel-client doctor --explain
-       if ($LASTEXITCODE -eq 0) { tunnel-client run }
-   } finally {
-       Remove-Item Env:CONTROL_PLANE_API_KEY, Env:CONTROL_PLANE_TUNNEL_ID, Env:MCP_COMMAND -ErrorAction SilentlyContinue
-   }
+   try { & "$env:LOCALAPPDATA\C3dMcpBridge\c3d-mcp-server.exe" --run-chatgpt-tunnel }
+   finally { Remove-Item Env:CONTROL_PLANE_API_KEY, Env:CONTROL_PLANE_TUNNEL_ID -ErrorAction SilentlyContinue }
    ```
+
+   It runs `tunnel-client run --mcp.command "./c3d-mcp-server.exe --read-only" --mcp.stdio-send-initialized-notification
+   --health.listen-addr 127.0.0.1:0` in the server's folder (the same launch as the CSI MCP servers). Stop it with Ctrl+C.
+   To check the tunnel set-up first: `tunnel-client doctor --explain`.
 
 3. While the tunnel is running, open **ChatGPT > Plugins > Add custom MCP server**, choose **Tunnel**, and select your
    tunnel. Enable the custom plugin in a chat and ask it to ping Civil 3D. Keep Civil 3D and the tunnel client running
@@ -150,7 +169,8 @@ This setup starts the server with `--read-only`, which exposes `civil3d_read` an
 
 ### Uninstall
 
-Run `uninstall.bat` from the zip, then remove `civil3d` from the MCP client’s settings. For cloud setup, stop the
+Quit Claude Desktop, then run `uninstall.bat` from the zip: it removes the plugin, the server and the `civil3d` entry
+from Claude Desktop and Codex (files backed up first). Remove it from ChatGPT desktop by hand. For cloud setup, stop the
 tunnel runtime and remove the custom MCP server from ChatGPT.
 
 ---
@@ -246,7 +266,7 @@ sheet: `layout_from_template` (your office template's layout with its title bloc
 
 ## 4. Features
 
-One tool, `civil3d(action, params)`: 72 read actions, 9 QA / help / import / sheet actions, and 132 edit operations inside the
+One tool, `civil3d(action, params)`: 84 read actions, 9 QA / help / import / sheet actions, and 165 edit operations inside the
 single `edit` action. Every parameter is listed in **[docs/ACTIONS.md](docs/ACTIONS.md)** and by `action="help"`.
 
 **Facts and actions, not design rules.** The MCP reads and changes the drawing; it does not judge a design. Reads return
@@ -265,6 +285,8 @@ by the AI client with your criteria, on top of this data.
 | Corridors | Corridors with baselines, regions and corridor surfaces; a corridor section at a station (points, links and shapes with codes); assemblies with their subassemblies |
 | Gravity networks | Networks, pipes (size, slope, length, connections), structures (rim, sump), parts lists with families and sizes, every catalogue field of a part (`get_part_data`), ground and cover along every pipe, hydraulic grade lines next to crown and rim levels, distances between the pipes of two networks (gravity and pressure) |
 | Pressure networks | Networks, pipes (diameters, lengths, cover), fittings, appurtenances, pipe runs, parts lists and sizes |
+| Networks and editing aids (0.24) | `network_trace` (parts between two parts), `get_source_tags` (import provenance), TIN triangles and vertices, alignment stations and distances, existing view frames / match lines and Civil 3D tables, AutoCAD groups |
+| Coordinate system | The drawing's coordinate system (zone, projection, datum, units) and transformation settings, search Civil 3D's library of systems, convert points between drawing coordinates and longitude / latitude; set the system with `coordinate_system_set` |
 | Styles and meta | Style names of each kind (including band and label styles), what a style contains (`get_style`), edit-permission state, API introspection |
 | QA | Layer names against a naming pattern; objects still carrying Civil 3D's default names |
 | Import | Check a Bentley SewerGEMS export (see below) |
@@ -453,6 +475,15 @@ Also good to know:
   changed payload needs a new ID. Status is held for the running session, with recent full results cached.
 - **Audit log.** Every permission decision and every edit batch is written to `%LOCALAPPDATA%\C3dMcpBridge\audit.log`.
 - **Nothing is forced.** Objects on locked layers or in xrefs make the batch fail with a message.
+- **File boundary.** Every file the plugin or the server reads or writes needs a full path. Device paths, the bridge's
+  own folder (`%LOCALAPPDATA%\C3dMcpBridge`: token, audit log), writes under Windows, Program Files, Startup and the
+  Autodesk plug-in folders, and executable or script file types are always refused; exports only write data
+  extensions. To keep the client inside your project folders, create `%LOCALAPPDATA%\C3dMcpBridge\policy.json`:
+  `{"allowedRoots": ["D:\\Projects", "\\\\server\\share\\jobs"]}`. A policy file that cannot be read refuses
+  every file. `get_edit_permission` shows the policy in force. Workbooks and CSV inputs are limited to 64 MB and
+  200,000 rows.
+- **Commands.** `command_run` runs only a fixed list of command-line commands without dialogs (audit, purge, regen,
+  zoom), after the batch commits; it is not part of the rollback and is written to the audit log.
 - **Overwrite protection.** Saving a copy, exporting or plotting onto an existing file needs `overwrite: true`.
 - **Sanity limits.** 500 operations per batch; coordinates beyond 1e8 (plan) or 1e5 (elevation) are rejected as unit mistakes;
   requests up to 4 MB; lists are cut at their `limit` and say so (`truncated: true`).
@@ -535,6 +566,7 @@ is predictable: `list_pressure_pipes` is in `Read/PressureRead.cs`, `pressure_ad
 |---|---|---|
 | Build and deploy the plugin | `build.bat` (Civil 3D closed) | `build_result.txt` |
 | Offline test of the server | `tests\run_smoke_test.bat` | `tests\results\smoke_test.txt` |
+| Offline test of the client set-up (Claude Desktop / Codex config merge) | `python tests\client_config_test.py` | console |
 | All read actions, live | `tests\run_live_read.bat` | `tests\results\live_read.txt` |
 | Save-failure hunt: replays the 0.15-0.19 suites and runs `diagnose_save` after every edit | `tests\run_save.bat` | `tests\results\save.txt`, `save_check.json` |
 | All edit operations, live | `tests\run_live_edit.bat` | `tests\results\live_edit.txt`, ends with `ALL PASS` |
@@ -542,6 +574,11 @@ is predictable: `list_pressure_pipes` is in `Read/PressureRead.cs`, `pressure_ad
 | Fixes 35-42 (labels, block import, assembly, clashes, solids file), live | `tests\run_fixes.bat` | `tests\results\fixes.txt` |
 | 0.21 features (show_objects, profile view labels, earthwork by station range), live | `tests\run_next.bat` | `tests\results\next.txt` |
 | MCP protocol (stdio handshake, stale target, dry run, rollback, replay), live on an empty Drawing1 | `tests\run_protocol.bat` | `tests\results\protocol.txt` |
+| 0.24 part A (#69 network edits, #70 UDP / parcel / point group data, #71 property_set, #72 source tags, #73 pressure runs), live | `tests\run_v024a.bat` | `tests\results\v024a.txt` |
+| 0.24 part B (#74 labels, #75 TIN editing, #76 command_run, #77 alignment extras, #78 plan production reads, #79 AutoCAD extras), live | `tests\run_v024b.bat` | `tests\results\v024b.txt` |
+| Compact tool description (C3D_MCP_COMPACT) and multi-topic help, offline | `python tests\compact_test.py` | console |
+| 0.23 (file boundary, points_export, permission retry, coordinate system, whole-number checks), live | `tests\run_v023.bat` | `tests\results\v023.txt` |
+| 0.23 file policy, bridge-client deadline / cancellation, SDK guard (offline; part of the smoke test) | `python tests\policy_test.py` | console |
 | 0.22 (bearings, H5 vertical curves, inspect_file budget, block / other-DWG reads, style_copy, band-set import), live | `tests\run_v022.bat` | `tests\results\v022.txt` |
 | MCP transport through a real client (permission dialog, busy ping, Civil 3D closed) | `tests\run_transport_edit.bat` / `_loop` / `_down` | `tests\results\transport_*.txt` |
 | Import retries (SewerGEMS / WaterGEMS) | `tests\run_imports_sewer.bat` / `_water` | `tests\results\imports_*.txt` |

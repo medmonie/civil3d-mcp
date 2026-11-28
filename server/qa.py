@@ -4,14 +4,22 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from bridge_client import call, drawing_target
+from bridge_client import _check_cancelled, call, drawing_target
 
 # Names Civil 3D generates itself, e.g. "Surface1", "Alignment - (3)", "Pipe Network - (2)".
 DEFAULT_NAME_RX = re.compile(
     r"^(Surface|Alignment|Pipe Network|Network|Pressure Network|Pipe Run)[\s\-]*\(?\d+\)?$", re.IGNORECASE)
 
 
+MAX_PATTERN_CHARS = 300
+MAX_LAYER_NAME_CHARS = 255   # AutoCAD's own limit for a symbol name
+
+
 def check_layer_names(pattern: str, skip_xref_layers: bool = True) -> dict[str, Any]:
+    # The match runs in a worker thread that cannot be interrupted, and Python's 're' has no time limit: bound what
+    # can be bounded (pattern size, text size) so a careless pattern cannot occupy the thread for ever.
+    if len(pattern) > MAX_PATTERN_CHARS:
+        raise ValueError(f"The pattern is {len(pattern)} characters; the limit is {MAX_PATTERN_CHARS}.")
     try:
         rx = re.compile(pattern)
     except re.error as exc:
@@ -26,7 +34,8 @@ def check_layer_names(pattern: str, skip_xref_layers: bool = True) -> dict[str, 
         if skip_xref_layers and (layer.get("xref") or "|" in name):
             continue
         checked += 1
-        if not rx.fullmatch(name):
+        _check_cancelled()
+        if len(name) > MAX_LAYER_NAME_CHARS or not rx.fullmatch(name):
             bad.append(name)
     return {
         "pattern": pattern,

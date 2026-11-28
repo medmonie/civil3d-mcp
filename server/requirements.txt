@@ -1,5 +1,6 @@
-mcp[cli]>=1.9,<2
+mcp[cli]>=1.19,<2
 anyio>=4.5,<5
 openpyxl>=3.1
 pydantic>=2.11,<3
 typing-extensions>=4.9
+tomlkit>=0.12

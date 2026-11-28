@@ -58,6 +58,19 @@ internal static class J
         TryGet(p, name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) ? Math.Clamp(n, min, max) : dflt;
 
     /// <summary>
+    /// An optional whole number that an edit WRITES into the drawing (a count, a precision, a colour index): absent ->
+    /// dflt; text, a fraction or a value outside min..max is refused. IntParam would clamp it or fall back to the
+    /// default without a word, and the drawing would then hold a value nobody asked for.
+    /// </summary>
+    public static int WholeParam(JsonElement p, string name, int dflt, int min, int max)
+    {
+        if (!TryGet(p, name, out var v)) return dflt;
+        if (v.ValueKind != JsonValueKind.Number || !v.TryGetDouble(out var d) || d != Math.Floor(d) || d < min || d > max)
+            throw new ArgumentException($"'{name}' must be a whole number from {min} to {max}.");
+        return (int)d;
+    }
+
+    /// <summary>
     /// An optional 0-based index that selects WHICH object an edit touches: absent -> dflt; anything that is not a whole
     /// number in 0..max is refused. Unlike IntParam it never clamps and never falls back to the default on a bad value,
     /// because a silently changed index edits the wrong object.
@@ -128,12 +141,12 @@ internal static class J
         ArrParam(p, name, max).Select(Text).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>A full path given in 'name' (checked BEFORE Path.GetFullPath, which would otherwise resolve a relative
-    /// path against Civil 3D's current folder).</summary>
-    public static string NeedFullPath(JsonElement p, string name, string op)
+    /// path against Civil 3D's current folder), allowed by FilePolicy for reading, or for writing when 'write' is set.</summary>
+    public static string NeedFullPath(JsonElement p, string name, string op, bool write = false)
     {
         string path = NeedStr(p, name);
         if (!Path.IsPathFullyQualified(path)) throw new ArgumentException($"{op}: '{name}' must be a full path such as C:\\Projects\\file.");
-        return Path.GetFullPath(path);
+        return write ? FilePolicy.Write(path, op) : FilePolicy.Read(path, op);
     }
 
     /// <summary>An optional list of numbers (empty when absent).</summary>

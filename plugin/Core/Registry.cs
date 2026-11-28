@@ -31,6 +31,9 @@ internal static class Registry
         Read("list_cad_styles", SheetRead.ListCadStyles);
         Read("get_block_properties", SheetRead.GetBlockProperties);
         Read("inspect_file", SheetRead.InspectFile);
+        Read("get_coordinate_system", GeoRead.GetCoordinateSystem);
+        Read("list_coordinate_systems", GeoRead.ListCoordinateSystems);
+        Read("transform_coordinates", GeoRead.TransformCoordinates);
         // terrain
         Read("list_surfaces", TerrainRead.ListSurfaces);
         Read("get_surface_elevation", TerrainRead.GetSurfaceElevation);
@@ -55,6 +58,15 @@ internal static class Registry
         Read("list_pipe_networks", GravityRead.ListPipeNetworks);
         Read("list_pipes", GravityRead.ListPipes);
         Read("list_structures", GravityRead.ListStructures);
+        Read("network_trace", NetworkEditOps.NetworkTrace);
+        Read("get_source_tags", ProvenanceOps.GetSourceTags);
+        Read("tin_triangles", TinOps.TinTriangles);
+        Read("tin_vertices", TinOps.TinVertices);
+        Read("alignment_stations", AlignmentExtraOps.AlignmentStations);
+        Read("alignment_distance", AlignmentExtraOps.AlignmentDistance);
+        Read("list_view_frames", PlanProductionRead.ListViewFrames);
+        Read("list_civil_tables", PlanProductionRead.ListCivilTables);
+        Read("list_groups", CadExtraOps.ListGroups);
         Read("list_gravity_parts", GravityRead.ListGravityParts);
         // pressure networks
         Read("list_pressure_networks", PressureRead.ListPressureNetworks);

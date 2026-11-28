@@ -14,8 +14,12 @@ pause
 exit /b 1
 :user_ok
 echo Removing the install of %USERDOMAIN%\%USERNAME%.
+tasklist /fi "imagename eq claude.exe" | find /i "claude.exe" >nul && (echo Quit Claude Desktop completely ^(tray icon ^> Quit^) first, then run uninstall.bat again. & pause & exit /b 1)
+set "TOOL=%LOCALAPPDATA%\C3dMcpBridge\c3d-mcp-server.exe"
+if not exist "%TOOL%" set "TOOL=%~dp0c3d-mcp-server.exe"
+if exist "%TOOL%" "%TOOL%" --remove-clients
 rmdir /s /q "%APPDATA%\Autodesk\ApplicationPlugins\C3dMcpBridge.bundle"
 rmdir /s /q "%LOCALAPPDATA%\C3dMcpBridge"
-echo Remove the civil3d entry from your MCP client: claude_desktop_config.json, ChatGPT desktop MCP servers, or ~/.codex/config.toml.
+echo Claude Desktop and Codex entries removed (files backed up first). Remove civil3d from ChatGPT desktop MCP servers by hand if you added it.
 echo If you set up a ChatGPT tunnel, stop its runtime and remove the custom MCP server from ChatGPT.
 pause

@@ -15,9 +15,10 @@ Group = dict[str, Entry]
 # Parameter descriptions that repeat.
 XY = "[x,y]"
 XYZ = "[x,y,z]"
+PART = "name or handle; a name is looked up in 'network' (or every network when unique)"
 ACI = "AutoCAD colour index 1-255"
 LIMIT_200 = {"network_name?": "only this network", "limit?": "default 200"}
-STYLE_KINDS = ("alignment | alignment_label_set | point_label | profile | profile_label_set | profile_view | profile_view_band_set | surface | "
+STYLE_KINDS = ("alignment | alignment_label_set | point_label | profile | profile_label_set | profile_view | profile_view_band_set | surface | parcel | "
                "corridor | pipe | structure | point | feature_line | sample_line | pressure_pipe_label | pressure_fitting_label | "
                "pressure_appurtenance_label | gravity_parts_list | pipe_label | structure_label | band_profile_data | band_pipe_network | "
                "band_horizontal_geometry | band_vertical_geometry")
@@ -49,6 +50,23 @@ READ_GROUPS: dict[str, Group] = {
                            "path?": "full path of a .dwg / .dwt / .dxf to read instead of the open drawing (with layout or block too)"}),
         "list_blocks": ("Block definitions: name, attributes flag, number of references.", {"limit?": "default 500"}),
         "list_layouts": ("Layouts (paper space tabs): name, tab order, plot device, paper size.", {}),
+        "get_coordinate_system": ("The drawing's coordinate system: the zone code of Civil 3D's Drawing Settings with its "
+                                  "description, category, projection, datum, unit and EPSG code; drawing and angular units; the "
+                                  "transformation settings (grid scale factor, sea-level factor, rotation, reference points); "
+                                  "AutoCAD's geographic location (design point, reference longitude / latitude, north direction) "
+                                  "and CGEOCS. assigned is false when the drawing has no coordinate system.",
+                                  {"wkt?": "also return the WKT definition (default false)"}),
+        "list_coordinate_systems": ("Coordinate systems of Civil 3D's library whose code contains a text: code, category, "
+                                    "description, projection, datum, unit. Use it to find the exact code for "
+                                    "coordinate_system_set (codes are Autodesk's own, e.g. UTM84-36N, not EPSG numbers).",
+                                    {"contains?": "text in the code, e.g. \"UTM84-36\" or \"Egypt\"",
+                                     "in_description?": "also search descriptions, categories and datums (slower; default false)",
+                                     "limit?": "default 50, max 500"}),
+        "transform_coordinates": ("Convert points between drawing coordinates and longitude / latitude through the drawing's "
+                                  "geographic location (what AutoCAD's own GEO commands give for this drawing). Needs a "
+                                  "coordinate system on the drawing.",
+                                  {"points": "[[x,y] or [x,y,z], ...]; for to: drawing give [[longitude, latitude], ...] in degrees (max 5000)",
+                                   "to?": "lonlat (default: drawing -> [longitude, latitude, elevation]) | drawing (lonlat -> [x, y, z])"}),
     },
     "Sheets and drawing set-up (AutoCAD)": {
         "list_viewports": ("Viewports on layouts: handle, position and size on paper, scale (1:N), model centre, twist, locked, frozen layers.",
@@ -98,7 +116,7 @@ READ_GROUPS: dict[str, Group] = {
                                        {"alignment_name": "", "station": "", "offset?": "default 0"}),
         "alignment_point_to_station": ("Station and offset of a point.", {"alignment_name": "", "x": "", "y": ""}),
         "list_profiles": ("Profiles: type, PVI count, station range, min/max elevation.", {"alignment_name?": "only this alignment"}),
-        "get_profile_elevation": ("Elevation of a profile at a station.", {"alignment_name": "", "profile_name": "", "station": ""}),
+        "get_profile_elevation": ("Elevation and grade (%) of a profile at a station, with the station label.", {"alignment_name": "", "profile_name": "", "station": ""}),
         "profile_sheet_window": ("Station range and enclosing plan window for part of a profile view.",
                                  {"alignment_name": "", "profile_view": "", "x_min": "profile drawing X", "x_max": "profile drawing X"}),
         "list_profile_views": ("Profile views: alignment, style, station and elevation range, position in the drawing.", {}),
@@ -150,6 +168,30 @@ READ_GROUPS: dict[str, Group] = {
         "list_pipe_networks": ("Gravity pipe networks: parts list, reference surface/alignment, pipe and structure counts.", {}),
         "list_pipes": ("Gravity pipes: part, inner diameter, slope (m/m), length, start/end, connected structures.", LIMIT_200),
         "list_structures": ("Gravity structures: part, location, rim/sump elevation, connected pipes.", LIMIT_200),
+        "alignment_stations": ("Stations of an alignment: geometry points (default), PIs, station equations, or every 'interval'; "
+                               "each with the station label (equations applied) and [x, y].",
+                               {"alignment": "", "kind?": "geometry (default) | pi | equation | interval | all", "interval?": "m",
+                                "limit?": "default 1000"}),
+        "alignment_distance": ("Perpendicular distance from stations of one alignment to another, with the station on the other.",
+                               {"alignment": "", "other": "", "stations": "[station, ...]"}),
+        "list_view_frames": ("Plan Production already in the drawing: view frame groups with each view frame (alignment, station "
+                             "range, sheet) and match lines (number, station). Creating them is a Civil 3D command, not in the API.", {}),
+        "list_civil_tables": ("Civil 3D's own tables already in the drawing: point, parcel, parcel segment, alignment and legend "
+                              "tables (handle, layer, extents).", {}),
+        "list_groups": ("AutoCAD groups: name, description, selectable, member count and handles.", {}),
+        "tin_triangles": ("Triangles of a TIN surface whose centroid lies in a window: three [x,y,z] each.",
+                          {"surface": "", "window": "[[xmin,ymin],[xmax,ymax]]", "limit?": "default 500"}),
+        "tin_vertices": ("TIN vertices of a surface inside a polygon.",
+                         {"surface": "", "polygon": "[[x,y], ...]", "limit?": "default 1000"}),
+        "get_source_tags": ("Objects that carry an import tag (source model, element ID, run), from source_tag_set or an import: "
+                            "for given handles, or every tagged object of model space filtered by source / source_id.",
+                            {"handles?": "[handle, ...]", "source?": "text contained in the source", "source_id?": "exact element ID",
+                             "limit?": "default 500"}),
+        "network_trace": ("The chain of pipes and structures between two parts of a gravity network (shortest path), with "
+                          "each pipe's length, slope and flow direction and each structure's rim and sump. connected: false "
+                          "when no path exists.",
+                          {"from": "structure or pipe: name or handle", "to": "structure or pipe: name or handle",
+                           "network?": "limits name look-up to this network"}),
         "list_gravity_parts": ("Without parts_list: the gravity parts lists. With it: its pipe and structure families and sizes "
                                "(use these to fill 'family' + 'inner_diameter' / 'size_index' in pipe_network_add).",
                                {"parts_list?": "name or handle"}),
@@ -199,7 +241,8 @@ READ_GROUPS: dict[str, Group] = {
                           {"scan?": "default true", "save_copy?": "default true",
                            "soft_refs?": "also list soft pointers to erased objects (default false)", "limit?": "rows per list, default 100",
                            "max_objects?": "default 2000000"}),
-        "get_edit_permission": ("Whether editing is currently allowed in the active drawing, and how to allow it.", {}),
+        "get_edit_permission": ("Whether editing is currently allowed in the active drawing, and how to allow it; plus 'files': "
+                                "the folders this PC allows MCP clients to read and write (policy.json), when it restricts them.", {}),
         "get_edit_status": ("Find an edit by request UUID. Check this after a timeout before retrying. Status remains available while Civil 3D is busy.",
                             {"target": "original drawing target", "request_id": "original edit UUID"}),
         "list_actions": ("What the installed plugin supports (names only). Use 'help' for descriptions.", {}),
@@ -249,7 +292,7 @@ PP_SHEETS_INPUT = {
 
 # computed in the MCP server from read actions; they never reach the plugin under these names
 LOCAL_ACTIONS: Group = {
-    "help": ("This catalogue with every parameter. Pass topic to narrow it.", {"topic?": "an action or edit operation name"}),
+    "help": ("This catalogue with every parameter. Pass topic to narrow it.", {"topic?": "an action or edit operation name, or several separated by commas"}),
     "check_layer_names": ("QA: layers whose names do not fully match a regular expression (e.g. the BEP layer convention).",
                           {"pattern": "regular expression", "skip_xref_layers?": "default true"}),
     "check_default_names": ("QA: surfaces, alignments and networks still carrying Civil 3D's auto-generated names.",
@@ -372,6 +415,11 @@ EDIT_GROUPS: dict[str, Group] = {
                               {"handle": "", "properties": "{name: value, ...}"}),
     },
     "Drawing file and sheets": {
+        "coordinate_system_set": ("Assign the drawing's coordinate system (the zone of Civil 3D's Drawing Settings) by its library "
+                                  "code, or clear it. An unknown code is refused. Nothing is moved, rotated or scaled: only "
+                                  "the statement of which system the drawing's coordinates are in changes. It is applied "
+                                  "after the batch is committed (afterCommitSucceeded); read get_coordinate_system afterwards.",
+                                  {"code": "library code from list_coordinate_systems, e.g. \"UTM84-36N\"; \"\" or \"none\" clears it"}),
         "layout_create": ("Create a layout (paper space tab).", {"name": ""}),
         "layout_delete": ("Delete a layout.", {"name": ""}),
         "layout_from_template": ("New layout copied from a layout of a template (.dwt/.dwg): its page setup, title block, viewports "
@@ -471,7 +519,8 @@ EDIT_GROUPS: dict[str, Group] = {
                                "delete_elevation_points?": "[[x,y]]", "radii?": "[{index, radius}]"}),
         "points_export": ("Write COGO points (all, or one point group) to a file in one of the drawing's point file formats; "
                           "runs after the batch is committed.",
-                          {"path": "", "format": "see list_point_file_formats", "point_group?": "", "overwrite?": "default false"}),
+                          {"path": "full path ending in .txt, .csv, .prn, .pnt, .xyz, .nez, .auf, .asc or .dat",
+                           "format": "see list_point_file_formats", "point_group?": "", "overwrite?": "default false"}),
         "udp_create": ("Define user-defined properties for points or parcels in a classification (created if missing).",
                        {"for?": "point (default) | parcel", "classification": "",
                         "properties": "[{name, type?: string|double|integer|boolean|enum, values?: enum values, default?, "
@@ -704,8 +753,9 @@ EDIT_GROUPS: dict[str, Group] = {
         "pipe_network_add": ("Add structures and straight pipes to a gravity network. A part is chosen by 'family' (words contained in "
                              "the family description) plus 'inner_diameter' (units as shown by list_gravity_parts) or 'size_index'. "
                              "Name endpoint structures for strict connections. Geometric matching skips ambiguous endpoints and reports them.",
-                             {"network": "", "structures?": "[{id?, name?, description?, at:[x,y,z], family, inner_diameter? | size_index?, rotation_deg?, rim?, sump?}, ...]",
-                              "pipes?": "[{id?, name?, description?, start:[x,y,z], end:[x,y,z] (centreline points), family, inner_diameter? | size_index?, start_structure?, end_structure?, verify_bore_mm? (metric drawings)}, ...]",
+                             {"network": "", "structures?": "[{id?, name?, description?, at:[x,y,z], family, inner_diameter? | size_index?, rotation_deg?, rim?, sump?, source_id?}, ...]",
+                              "pipes?": "[{id?, name?, description?, start:[x,y,z], end:[x,y,z] (centreline points), family, inner_diameter? | size_index?, start_structure?, end_structure?, verify_bore_mm? (metric drawings), source_id?}, ...]",
+                              "source?": "with source_id: the source model, stored on each part (get_source_tags)", "run?": "import run label",
                               "parts_list?": "default: the network's", "apply_rules?": "default false", "connect_tolerance?": "default 0.01"}),
         "pipe_curved_add": ("Add a curved gravity pipe between two points, by radius (and clockwise) or through a point.",
                             {"network": "", "start": "[x,y,z] centreline", "end": "[x,y,z]", "radius?": "", "clockwise?": "default false",
@@ -720,6 +770,116 @@ EDIT_GROUPS: dict[str, Group] = {
                       "inner_diameter?": "nearest catalogue size, in the units of list_gravity_parts (mm in metric lists)", "description?": ""}),
         "structure_set": ("Change one gravity structure.",
                           {"handle": "", "location?": XYZ, "rim?": "", "sump?": "", "rotation_deg?": "", "description?": ""}),
+        "source_tag_set": ("Store (or clear) where an object came from: source model, element ID in it, import run (XData of the "
+                           "application C3DMCP; kept with the object through save and copy). Imports tag their objects themselves.",
+                           {"items": "[{handle, source_id, source?, run?}, ...]", "source?": "default for every item", "run?": "",
+                            "clear?": "true removes the tags of the items instead"}),
+        "property_set": ("Set single Civil 3D settings that have no operation of their own; each is read back (before / after). "
+                         "Only these can be set - Alignment: reference_point_station, station_index_increment, use_design_speed. "
+                         "Profile: update_mode (Static | Dynamic). ProfileView: elevation_range_mode, elevation_min, elevation_max, "
+                         "station_range_mode, station_start, station_end, split_profile_view, split_height. Pipe: flow_direction_method, "
+                         "hold_on_resize_type, return_period, flow_rate, entry_loss, exit_loss, junction_loss, average_loss. Structure: "
+                         "control_sump_by, sump_depth, rim_to_sump_height, automatic_rim_surface_adjustment, surface_adjustment_value, "
+                         "structure_type, tailwater_condition, tailwater_elevation, known_capacity. Pipe / structure: known_flow. "
+                         "Corridor: maximum_triangle_side_length, rebuild_automatic, region_lock_mode. Enumerations take their "
+                         "Civil 3D names (the error lists them); name, style and layer: object_set.",
+                         {"handle": "", "properties": "{name: value, ...}"}),
+        "surface_tin_edit": ("Edit a TIN surface's triangulation (each change is a surface edit in Civil 3D's definition; the surface "
+                             "is rebuilt). Points are matched to the nearest TIN vertex within 'tolerance'; edges are picked by a point "
+                             "on them. Order: add vertices, set elevations, move, add lines, swap, delete lines, delete vertices, raise.",
+                             {"surface": "", "add_vertices?": "[[x,y,z], ...]", "set_elevations?": "[[x,y,new z], ...]",
+                              "move_vertices?": "[[x,y,new x,new y], ...]", "add_lines?": "[[x1,y1,x2,y2], ...] between vertices",
+                              "swap_edges?": "[[x,y] on the edge, ...]", "delete_lines?": "[[x,y] on the edge, ...]",
+                              "delete_vertices?": "[[x,y], ...]", "raise?": "m, whole surface",
+                              "raise_inside?": "[[x,y], ...] polygon", "raise_by?": "m, with raise_inside", "tolerance?": "default 0.05 m"}),
+        "surface_simplify": ("Reduce a TIN surface's points (point removal or edge contraction) by a percentage and / or a maximum "
+                             "elevation change, over the whole surface or a polygon.",
+                             {"surface": "", "method?": "point_removal (default) | edge_contraction", "percent?": "of points to remove, 0-100",
+                              "max_elevation_change?": "m", "region?": "[[x,y], ...]"}),
+        "surface_smooth": ("Smooth a TIN surface inside a polygon by natural-neighbour interpolation, adding points on a grid, at "
+                           "triangle centroids, at random or at edge midpoints.",
+                           {"surface": "", "region": "[[x,y], ...]", "points?": "grid (default) | centroids | random | edge_midpoints",
+                            "spacing?": "m, for grid", "spacing_y?": "", "orientation_deg?": "", "count?": "for random"}),
+        "surface_minimize_flat_areas": ("Reduce flat triangles (e.g. from contours) by filling gaps, swapping edges and adding points.",
+                                        {"surface": "", "fill_gaps?": "default true", "swap_edges?": "default true",
+                                         "add_points_to_triangles?": "default true", "add_points_to_edges?": "default true"}),
+        "surface_mask_add": ("Mask a surface's display inside or outside a closed polyline.",
+                             {"surface": "", "name": "", "polyline": "handle of a closed polyline", "type?": "inside (default) | outside",
+                              "description?": "", "mid_ordinate?": "for arcs, default 0.1 m"}),
+        "alignment_reverse": ("Reverse an alignment's direction (stations run from the other end). An alignment with profiles needs confirm: true.",
+                              {"alignment": "", "confirm?": ""}),
+        "alignment_copy_to_site": ("Copy an alignment into a site.", {"alignment": "", "site": ""}),
+        "alignment_to_polyline": ("Draw a polyline that follows an alignment (lines and arcs; spirals approximated by Civil 3D).",
+                                  {"alignment": "", "layer?": ""}),
+        "draw_spline": ("Draw a spline through points (fit points).",
+                        {"points": "[[x,y,z], ...]", "degree?": "1-3, default 3", "closed?": "", **DRAW_ON}),
+        "draw_ellipse": ("Draw an ellipse or elliptical arc.",
+                         {"center": XYZ, "major_axis": "[dx, dy] from the centre to the end of the major axis",
+                          "ratio": "minor / major, 0-1", "start_deg?": "", "end_deg?": "", **DRAW_ON}),
+        "draw_wipeout": ("Draw a wipeout (masks what lies under it) from a closed outline.",
+                         {"points": "[[x,y], ...] outline", **DRAW_ON}),
+        "draw_field_text": ("Multiline text holding an AutoCAD field that updates itself: file name, dates, author, title, layout "
+                            "name, or any field expression. Returns the evaluated value.",
+                            {"at": XYZ, "field?": "filename | date | savedate | plotdate | author | title | layout",
+                             "code?": "or a field expression %<...>%", "format?": "date format, default dd.MM.yyyy",
+                             "prefix?": "text before", "suffix?": "text after", "height?": "default 2.5", "rotation_deg?": "", **DRAW_ON}),
+        "group_create": ("Group drawing objects under a name (AutoCAD group).",
+                         {"name": "", "handles": "[handle, ...]", "description?": "", "selectable?": "default true"}),
+        "group_edit": ("Add or remove members of a group, change it, or ungroup (the objects stay).",
+                       {"name": "", "add?": "[handle, ...]", "remove?": "[handle, ...]", "description?": "", "selectable?": "",
+                        "ungroup?": "true removes the group"}),
+        "alignment_labels_add": ("Add station labels (major, and minor between them) and / or geometry point labels along an alignment.",
+                                 {"alignment": "", "major_interval?": "m", "minor_interval?": "m, smaller than major",
+                                  "geometry_points?": "true", "major_style?": "", "minor_style?": "", "geometry_style?": ""}),
+        "profile_grade_labels_add": ("Label the tangents (grades) of a profile in a profile view.",
+                                     {"profile_view": "", "profile": "", "style?": "profile line label style"}),
+        "spanning_pipe_label_add": ("One label spanning several gravity pipes of a run (e.g. total length and grade), in plan or in a profile view.",
+                                    {"pipes": "[name or handle, ...] (2 or more)", "network?": "", "anchor?": "pipe the label sits on",
+                                     "ratio?": "0-1 along the anchor, default 0.5", "profile_view?": "label in this profile view instead of plan",
+                                     "style?": "pipe label style"}),
+        "profile_view_depth_label_add": ("A depth label between two points in a profile view (elevation difference).",
+                                         {"profile_view": "", "from": XY, "to": XY, "style?": ""}),
+        "crossing_pressure_labels_add": ("Label the pressure pipes that cross a profile view's alignment (shown as crossings).",
+                                         {"profile_view": "", "pressure_network": "", "ratio?": "", "style?": "pressure pipe label style"}),
+        "command_run": ("Run one of a fixed list of AutoCAD commands that have no API, after the batch commits: audit (report), "
+                        "audit_fix, regenall, purge_regapps, purge_zero_length, purge_empty_text, zoom_extents. It is queued on "
+                        "Civil 3D's command line, is not part of the rollback (UNDO in Civil 3D undoes it) and is audited; check "
+                        "its effect with a read.",
+                        {"command": "audit | audit_fix | regenall | purge_regapps | purge_zero_length | purge_empty_text | zoom_extents"}),
+        "udp_set": ("Write a user-defined property value on COGO points or parcels (definitions: udp_create / list_user_properties). "
+                    "The value must fit the property's type; an enumeration takes one of its values.",
+                    {"kind?": "point (default) | parcel", "property": "", "classification?": "needed when several have the property",
+                     "value?": "one value for every item in points / parcels", "points?": "[point number, ...]",
+                     "parcels?": "[parcel name or handle, ...]", "values?": "or: {point number or parcel name: value, ...}"}),
+        "parcel_set": ("Change an existing parcel's number, address, tax ID or style (creating parcels is not in the Civil 3D API).",
+                       {"parcel": "name or handle (list_parcels)", "number?": "", "address?": "", "tax_id?": "", "style?": "parcel style"}),
+        "point_group_action": ("Lock, unlock or update a point group, or delete the COGO points it contains.",
+                               {"group": "", "action": "lock | unlock | update | delete_points",
+                                "confirm?": "true is required for delete_points"}),
+        "pipe_break": ("Split a gravity pipe with a structure, keeping its grade: an existing structure, or a new one from the "
+                       "network's parts list (family + inner_diameter / size_index, as in pipe_network_add). Returns both pipes; "
+                       "the new pipe keeps the original's import tag (get_source_tags).",
+                       {"pipe": PART, "network?": "", "at?": "[x, y] on the pipe in plan", "distance?": "or: plan distance from the start (m)",
+                        "structure?": "existing structure (name or handle) instead of a new one", "family?": "new structure family",
+                        "inner_diameter?": "", "size_index?": "", "structure_name?": "", "new_pipe_name?": "", "rotation_deg?": "",
+                        "tolerance?": "how far 'at' may lie off the pipe in plan, default 0.5 m", "parts_list?": ""}),
+        "parts_move": ("Move gravity pipes and structures to another network of the drawing.",
+                       {"to_network": "", "pipes?": "[name or handle, ...]", "structures?": "[name or handle, ...]",
+                        "network?": "the network the names are looked up in"}),
+        "pipe_connect": ("Connect one end of a gravity pipe to a structure, or disconnect it.",
+                         {"pipe": PART, "end": "start | end", "structure?": "name or handle (same network)",
+                          "disconnect?": "true to disconnect instead", "force?": "connect even if Civil 3D's rules object", "network?": ""}),
+        "pipe_regrade": ("Set a gravity pipe's slope holding its start or end invert (Civil 3D moves the other end).",
+                         {"pipe": PART, "slope": "m/m, e.g. 0.005 = 0.5 %; negative falls towards the start",
+                          "hold?": "start (default) | end", "network?": ""}),
+        "pipe_end_adjust": ("Move a pipe end to the centre, inner wall or outer wall of the structure it is connected to.",
+                            {"pipe": PART, "end": "start | end", "location?": "center | inner_wall (default) | outer_wall",
+                             "offset?": "m", "network?": ""}),
+        "structure_resize": ("Resize structures to the depth of their connected pipes (Civil 3D's own rule). Returns rim / sump before and after.",
+                             {"structure?": PART, "structures?": "[name or handle, ...]", "network?": ""}),
+        "pipe_flow_direction": ("Set how a gravity pipe's flow direction is decided.",
+                                {"pipe?": PART, "pipes?": "[name or handle, ...]",
+                                 "method": "start_to_end | end_to_start | by_slope | bidirectional", "network?": ""}),
         "parts_list_add_family": ("Add a part family from the Civil 3D catalogue to a gravity parts list, with the sizes given "
                                   "(e.g. a shallow flat-top manhole for a sanitary list). Nothing changes if it is already there.",
                                   {"parts_list": "", "domain": "pipe | structure", "family": "exact family description, e.g. 'Cylindrical Junction Structure NF SI'",
@@ -747,15 +907,23 @@ EDIT_GROUPS: dict[str, Group] = {
                          {"network": "", "pipes?": "[{id?, name?, description?, start:[x,y,z], end:[x,y,z], size, match? (or part: exact description), "
                                                     "through?: [x,y] makes a curved pipe through that point}, ...]",
                           "fittings?": "[{id?, name?, description?, at:[x,y,z], type?: Elbow|Tee|Reducer|Cross|Cap|..., size, match? (or part)}, ...]",
+                          "source?": "with source_id on an item: the source model, stored on the part (get_source_tags)", "run?": "",
                           "appurtenances?": "[{id?, name?, description?, at:[x,y,z], type?: Valve|Hydrant|..., size, match? (or part)}, ...]",
                           "parts_list?": "default: the network's", "connect_tolerance?": "default 0.01"}),
         "pressure_pipe_run": ("Create a pipe run along a 2D path at a depth of cover below the network's reference surface, with "
                               "bends added automatically (the way the Civil 3D pipe-run command works).",
                               {"network": "", "name": "", "points": "[[x,y], ...]", "size": "", "match?": "", "cover?": "default 1.0",
                                "auto_bends?": "default true", "keep_path?": "keep the path polyline", "layer?": "", "parts_list?": ""}),
-        "pressure_run_edit": ("Edit a pressure pipe run: bends at plan points (PIs), vertical bends at [station, elevation], or merge "
-                              "another run into it.",
-                              {"network": "", "run": "", "bends?": "[[x,y]]", "vertical_bends?": "[[station, elevation]]", "merge?": "other run name"}),
+        "pressure_run_edit": ("Edit a pressure pipe run: add or remove bends at plan points (PIs) and vertical bends at [station, "
+                              "elevation], make it follow a profile of its alignment at an offset, set the vertical offset type, "
+                              "reset its reference profile, merge another run into it, or break it in two at a plan point. "
+                              "Order: add, remove, follow / offset, reset, merge, break.",
+                              {"network": "", "run": "", "bends?": "[[x,y]]", "vertical_bends?": "[[station, elevation]]",
+                               "remove_bends?": "[[x,y]] PIs to remove", "remove_vertical_bends?": "[[station, elevation]]",
+                               "follow_profile?": "profile name of the run's alignment", "offset?": "m, with follow_profile",
+                               "offset_type?": "cut_length | offset_at_bends | offset_at_fitting", "keep_follow?": "default true",
+                               "reset_reference_profile?": "true", "merge?": "other run name",
+                               "break_at?": "[x,y] plan point", "new_run_name?": "name of the second run after break_at"}),
         "pressure_part_set": ("Move or resize ONE pressure part.",
                               {"handle": "", "start?": "[x,y,z] (pipe)", "end?": "[x,y,z] (pipe)", "location?": "[x,y,z] (fitting/appurtenance)",
                                "size?": "new size", "match?": "", "description?": ""}),
@@ -785,13 +953,30 @@ EDIT_PARAMS = {"operations": "list of edit operations", "target": "drawing targe
                "request_id": "unique edit UUID", "dry_run?": "bool"}
 
 
+def compact() -> bool:
+    """C3D_MCP_COMPACT=1: names and parameters only in the tool description (about a third of the size); the client
+    reads summaries and parameter descriptions with help(topic) when it needs them (roadmap #80)."""
+    import os
+    return os.environ.get("C3D_MCP_COMPACT", "").strip().lower() in ("1", "true", "yes")
+
+
+def _first_clause(summary: str, limit: int = 70) -> str:
+    text = summary.split(". ")[0].split(": ")[0].rstrip(".")
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
 def _signatures(groups: dict[str, Group]) -> list[str]:
-    """One heading per group, one line per entry: '- name(param, param?): summary'."""
+    """One heading per group, one line per entry: '- name(param, param?): summary' (compact: a short clause)."""
     out: list[str] = []
+    short = compact()
     for title, group in groups.items():
         out.append(f"[{title}]")
-        out += [f"- {name}({', '.join(params)}): {summary}" if params else f"- {name}: {summary}"
-                for name, (summary, params) in group.items()]
+        if short:
+            # One line per group: the names only. help(topic) gives the summary and parameters.
+            out.append(", ".join(group))
+            continue
+        for name, (summary, params) in group.items():
+            out.append(f"- {name}({', '.join(params)}): {summary}" if params else f"- {name}: {summary}")
     return out
 
 
@@ -807,7 +992,8 @@ def tool_description(mode: str = "all") -> str:
     if mode in ("all", "read"):
         out.append("Work with the drawing open in Autodesk Civil 3D on this computer. Call with action=<name> and params={...}. "
                    "Reading never changes the drawing (show_objects changes only the view and selection). Parameters ending in ? are optional. action='help' returns every "
-                   "parameter description.")
+                   "parameter description." + (" Only names are listed here (compact mode): call help with topic=<action or "
+                                               "operation name> for its summary and parameters before using it." if compact() else ""))
         out.append("\nREAD ACTIONS")
         out += _signatures(READ_GROUPS)
         local = LOCAL_ACTIONS if mode == "all" else {k: v for k, v in LOCAL_ACTIONS.items() if k not in IMPORT_ACTIONS}
@@ -834,6 +1020,11 @@ def help_data(topic: str | None = None, *, include_edits: bool = True) -> dict:
         if include_edits:
             data.update(edit=edit, editOperations=full(EDIT_OPS))
         return data
+    if "," in topic:   # several topics in one call (compact mode)
+        merged: dict = {}
+        for t in [x.strip() for x in topic.split(",") if x.strip()][:40]:
+            merged.update(help_data(t, include_edits=include_edits))
+        return merged
     if include_edits and topic == "edit":
         return {"edit": {**edit, "operations": full(EDIT_OPS)}}
     if include_edits:

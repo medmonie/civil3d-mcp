@@ -360,13 +360,13 @@ internal static class ModelOps
         string mode = Choice(p, "mode", "", "depth", "elevation", "surface");
         string layer = StrParam(p, "layer") ?? "0";
         LayerId(c.Db, c.Tr, layer);   // must exist
-        ushort pen = (ushort)IntParam(p, "color", 256, 0, 256);
+        ushort pen = (ushort)WholeParam(p, "color", 256, 0, 256);
         double value = mode == "depth" ? NeedPositive(p, "depth") : mode == "elevation" ? NeedDbl(p, "elevation") : 0;
         ObjectId bottom = mode == "surface" ? FindSurface(c.Civ, c.Tr, NeedStr(p, "bottom_surface")).ObjectId : ObjectId.Null;
 
         if (StrParam(p, "file") is { Length: > 0 })
         {
-            string path = NeedFullPath(p, "file", op);
+            string path = NeedFullPath(p, "file", op, write: true);
             if (!path.EndsWith(".dwg", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException($"{op}: file must be a .dwg path.");
             if (File.Exists(path) && BoolParam(p, "overwrite") != true) throw new ArgumentException($"{op}: {path} exists; pass overwrite: true.");
             if (Path.GetDirectoryName(path) is not string dir || !Directory.Exists(dir)) throw new ArgumentException($"{op}: folder not found for {path}.");

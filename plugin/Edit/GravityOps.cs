@@ -121,6 +121,7 @@ internal static class GravityOps
             net.AddStructure(part.FamilyId, part.SizeId, at, Rad(DblParam(s, "rotation_deg") ?? 0), ref id, applyRules);
             var st = (CivilDb.Structure)c.Tr.GetObject(id, OpenMode.ForWrite);
             Describe(st, s, what);
+            if (Provenance.FromSpec(s, p) is { } stTag) Provenance.Write(c.Tr, c.Db, st, stTag);
             SetLevels(st, DblParam(s, "rim"), DblParam(s, "sump"));
             IndexStructure(st);
             created.Add(new
@@ -147,6 +148,7 @@ internal static class GravityOps
             // Connect each end to the structure standing at it (in plan).
             var pipe = (CivilDb.Pipe)c.Tr.GetObject(id, OpenMode.ForWrite);
             Describe(pipe, s, what);
+            if (Provenance.FromSpec(s, p) is { } pipeTag) Provenance.Write(c.Tr, c.Db, pipe, pipeTag);
             int made = 0;
             foreach (var (end, position, key) in new[]
             {

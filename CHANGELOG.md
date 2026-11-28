@@ -1,5 +1,109 @@
 # Changelog
 
+## 0.24.0
+
+The API gap packages of roadmap #69 - #80 (`docs/API_GAP_0.23.md`). Tested live on Civil 3D 2027: `tests\run_v024a.bat`
+58 checks and `tests\run_v024b.bat` 41 checks, ALL PASS; the 0.22 and 0.23 suites and the SewerGEMS import pass again
+on the same build. Built for 2024 / 2025 / 2027.
+
+**New: gravity network editing (#69)**
+- `pipe_break` (split a pipe with an existing or new structure, grade kept), `parts_move` (to another network),
+  `pipe_connect` (connect / disconnect an end), `pipe_regrade` (slope holding the start or end invert),
+  `pipe_end_adjust` (to the structure centre or walls), `structure_resize` (by pipe depths), `pipe_flow_direction`.
+  Parts are named by handle or by name (with `network`).
+- Read `network_trace`: the chain of pipes and structures between two parts, with length, slopes and levels.
+
+**New: data on objects (#70, #71)**
+- `udp_set`: write user-defined property values on COGO points and parcels (type-checked; enumerations by value).
+- `parcel_set` (number, address, tax ID, style), `point_group_action` (lock, unlock, update, delete its points with
+  confirm). `list_styles kind: parcel`.
+- `property_set`: an allowlist of single Civil 3D settings (starting chainage, profile update mode, profile view
+  ranges and split, pipe flow / hydraulics, structure sump control and depth, corridor triangle length / region lock /
+  rebuild), each read back before / after.
+
+**New: import provenance (#72)**
+- `source_tag_set` and read `get_source_tags`: source model, element ID and import run stored as XData (C3DMCP) on the
+  object. `pipe_network_add` and `pressure_add` take `source_id` per item; the SewerGEMS and WaterGEMS imports now tag
+  every structure, pipe, fitting and appurtenance with its model ID (prerequisite for #6 and #8).
+
+**New: pressure runs (#73)**
+- `pressure_run_edit` also removes bends and vertical bends, follows a profile at an offset, sets the vertical offset
+  type, resets the reference profile and breaks a run in two.
+
+**New: labels (#74)**
+- `alignment_labels_add` (major / minor stations, geometry points), `profile_grade_labels_add`,
+  `spanning_pipe_label_add` (plan or profile view), `profile_view_depth_label_add`, `crossing_pressure_labels_add`.
+
+**New: TIN surfaces (#75)**
+- `surface_tin_edit` (add / move / delete vertices, set elevations, add / swap / delete edges, raise all or inside a
+  polygon), `surface_simplify`, `surface_smooth` (natural neighbour), `surface_minimize_flat_areas`,
+  `surface_mask_add`; reads `tin_triangles`, `tin_vertices`.
+
+**New: command runner, first step (#76)**
+- `command_run`: an allowlist of commands with no API and no dialog (audit, audit_fix, regenall, purge_regapps,
+  purge_zero_length, purge_empty_text, zoom_extents), queued after the commit and audited.
+
+**New: alignments, plan production, AutoCAD (#77 - #79)**
+- `alignment_reverse`, `alignment_copy_to_site`, `alignment_to_polyline`; reads `alignment_stations`,
+  `alignment_distance`; `get_profile_elevation` adds the grade and the station label.
+- Reads `list_view_frames` (view frame groups, frames, match lines) and `list_civil_tables`.
+- `draw_spline`, `draw_ellipse`, `draw_wipeout`, `draw_field_text` (file name, dates, author, title, layout or any
+  field), `group_create`, `group_edit`; read `list_groups`.
+
+**Smaller tool description (#80)**
+- `C3D_MCP_COMPACT=1` lists only the action and operation names (about 12 % of the full description, ~1,700 tokens);
+  the client reads details with `help`, which now takes several topics separated by commas.
+
+**Fixed during the live test**
+- `network_trace`: Civil 3D's shortest path leaves out the end part; it is added.
+- `surface_mask_add`: Civil 3D needs a render material even for a display mask; the drawing's Global material is used.
+
+## 0.23.0
+
+Code audit 0.23 (`docs/AUDIT_0.23.md`) and the coordinate system (roadmap #39). Tested live on Civil 3D 2027
+(`tests\run_v023.bat`, 56 checks); built for 2024 / 2025 / 2027.
+
+**New**
+- `get_coordinate_system`, `list_coordinate_systems`, `transform_coordinates` (drawing <-> longitude / latitude) and
+  the edit `coordinate_system_set` (applied after the commit; a dry run only validates; `.` clears it).
+- File boundary on both sides (`plugin/Core/FilePolicy.cs`, `server/filepolicy.py`): full paths only, no device paths,
+  nothing in the bridge folder, no writes under Windows / Program Files / Startup / plug-in folders, never an
+  executable or script type. Optional `%LOCALAPPDATA%\C3dMcpBridge\policy.json` with `allowedRoots` (fails closed).
+  Workbook / CSV inputs: 64 MB and 200,000 rows; layer QA pattern 300 characters.
+
+**Fixed**
+- H-1: failed edits reached the client as successes on MCP SDK 1.9 - 1.18. `requirements.txt` now needs 1.19+ and the
+  server refuses to start on an older SDK.
+- H-2: `points_export` could write any extension into any folder; data extensions only, through the file policy.
+- H-3: one failed socket accept stopped the bridge for the session while it still reported itself as listening; the
+  accept loop now backs off and continues.
+- M-1: "permission not granted" was stored as the request's final result; now retryable after MCPALLOW.
+- M-2: a commit that throws left no receipt and skipped clean-up; now a rolled-back receipt (`failedAt: commit`).
+- M-3: material-volume sampling is limited to 2,000,000 samples (a tiny step froze Civil 3D).
+- M-4: whole-number parameters (decimals, per_row, columns, count, colour indexes) refuse text, fractions and
+  out-of-range values instead of silently changing them.
+- M-5: bridge replies have one deadline per call; cancelled reads are abandoned within 0.5 s (edits never are).
+- M-8: a request without the token gets one answer and the connection is closed.
+
+**Installer** (developed as 0.22.1, not released separately)
+- The civil3d entry was no longer picked up: Claude Desktop 6.x reads
+  `%LOCALAPPDATA%\Claude-Data\claude_*\claude_desktop_config.json`, which the installer did not write. It now writes
+  that file too (plus the classic and older Store locations).
+- Client set-up moved from `configure_clients.ps1` to the server exe (`c3d-mcp-server.exe --configure-clients`), so
+  company policies that block PowerShell scripts no longer stop it. Each file is backed up, merged, written in one step
+  and read back; an existing entry keeps its args and env.
+- `install.bat` stops while Claude Desktop is running (it would write its old settings back over the new entry);
+  `/claude_open` overrides. It unblocks the downloaded files and writes `install_result.txt`.
+- `uninstall.bat` removes the civil3d entry from Claude Desktop and Codex too.
+- Codex (and the ChatGPT desktop app, which shares its config) gets `C3D_MCP_SPLIT = "1"`: separate read / edit /
+  import tools, so reads can be allowed without edits (as the CSI MCP servers do). An existing value is kept.
+- `c3d-mcp-server.exe --run-chatgpt-tunnel` starts OpenAI's `tunnel-client` with the server read-only
+  (`--mcp.stdio-send-initialized-notification`, health on 127.0.0.1:0), replacing the hand-written PowerShell.
+- An entry left from a source install (`python.exe` + `server.py`) became exe + `server.py` after the update, and the
+  exe refused the argument ("could not start"). The installer now drops every argument except `--read-only`, and the
+  server ignores unknown arguments with a warning instead of exiting.
+- Test: `tests/client_config_test.py` (offline).
+
 ## 0.22.0
 
 **New**

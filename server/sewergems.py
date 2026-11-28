@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid5
 
+import filepolicy
 from bridge_client import EDIT_TIMEOUT, BridgeError, DrawingTarget, call, drawing_target, edit_request_id
 
 INVERT_TOLERANCE = 0.005      # m; level differences below this are rounding, not drops or reversals
@@ -73,7 +74,7 @@ def _rows_xlsx(path: Path, sheet: str) -> list[dict[str, Any]]:
     try:
         if sheet not in book.sheetnames:
             return []
-        rows = list(book[sheet].iter_rows(values_only=True))
+        rows = list(filepolicy.bounded(book[sheet].iter_rows(values_only=True), f"{path.name} sheet '{sheet}'"))
     finally:
         book.close()
     if not rows:
@@ -87,7 +88,7 @@ def _rows_csv(path: Path) -> list[dict[str, Any]]:
         reader = csv.reader(f)
         header = next(reader, [])
         keys = _keys(header, path.name)
-        return [dict(zip(keys, r)) for r in reader if any(c.strip() for c in r)]
+        return [dict(zip(keys, r)) for r in filepolicy.bounded(reader, path.name) if any(c.strip() for c in r)]
 
 
 def _pick(row: dict[str, Any], *names: str) -> Any:
@@ -102,12 +103,7 @@ def _active(row: dict[str, Any]) -> bool:
 
 
 def _need_path(text: str | None, what: str) -> Path:
-    if not text:
-        raise ValueError(f"Give {what}.")
-    path = Path(text).expanduser()
-    if not path.is_file():
-        raise ValueError(f"{what}: file not found: {path}")
-    return path
+    return filepolicy.readable(text, what)
 
 
 def read(params: dict[str, Any]) -> dict[str, Any]:
@@ -179,7 +175,7 @@ def read_rename(path_text: str | None) -> dict[str, str]:
         return {}
     rename = {}
     with open(_need_path(path_text, "rename_csv"), encoding="utf-8-sig", newline="") as f:
-        for row in csv.reader(f):
+        for row in filepolicy.bounded(csv.reader(f), "rename_csv"):
             if len(row) >= 2 and row[0].strip() and row[1].strip():
                 label = row[0].strip()
                 if label in rename:
@@ -585,6 +581,7 @@ def _check_batch(batch: dict[str, Any], phase: str) -> None:
 def build(params: dict[str, Any]) -> dict[str, Any]:
     target = drawing_target(params)
     request_id = edit_request_id(params)
+    run_label = f"import {request_id}"
     attempt = params.get("finish_attempt", 1)
     if type(attempt) is not int or not 1 <= attempt <= 20:
         raise ValueError("'finish_attempt' must be an integer from 1 to 20.")
@@ -631,7 +628,7 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
     structures = [{
         "name": _name(rename, label), "description": f"SewerGEMS {label}" + (" (outfall)" if n["kind"] == "outfall" else ""),
         "at": [n["x"], n["y"], n["ground"]], "family": parts["structure_family"],
-        "inner_diameter": parts["structure_diameter"], "rim": n["ground"], "sump": n["invert"],
+        "inner_diameter": parts["structure_diameter"], "rim": n["ground"], "sump": n["invert"], "source_id": label,
     } for label, n in nodes.items()]
     pipe_ops = []
     for p in pipes:
@@ -644,6 +641,7 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
             "start": [a["x"], a["y"], p["inv_start"] + half], "end": [b["x"], b["y"], p["inv_stop"] + half],
             "family": parts["pipe_family"], "size_index": size["size_index"], "verify_bore_mm": p["nominal_mm"],
             "start_structure": _name(rename, p["start"]), "end_structure": _name(rename, p["stop"]),
+            **({"source_id": p["label"]} if p.get("label") else {}),
         })
 
     core_ops: list[dict[str, Any]] = [
@@ -651,7 +649,8 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
          "family": parts["structure_family"], "sizes": [parts["structure_diameter"]]},
         {"op": "pipe_network_create", "name": net, "parts_list": opts["parts_list"],
          "description": f"From SewerGEMS: {Path(plan['source']).name}"},
-        {"op": "pipe_network_add", "network": net, "structures": structures, "pipes": pipe_ops},
+        {"op": "pipe_network_add", "network": net, "structures": structures, "pipes": pipe_ops,
+         "source": f"SewerGEMS: {Path(plan['source']).name}", "run": run_label},
     ]
     style = params.get("profile_view_style") or (options["profile_view_style"] if styled else None)
     band_set = params.get("band_set") or options.get("band_set")

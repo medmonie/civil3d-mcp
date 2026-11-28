@@ -26,11 +26,10 @@ if "%FOUND%"=="0" goto fail
 
 echo [2/4] server exe >> "%LOG%"
 server\.venv\Scripts\python -m pip install -r server\requirements.txt pyinstaller >> "%LOG%" 2>&1 || goto fail
-server\.venv\Scripts\python -m PyInstaller --onefile --noconfirm --name c3d-mcp-server --collect-all mcp --paths server --hidden-import catalog --hidden-import qa --hidden-import bridge_client --hidden-import sewergems --hidden-import watergems --hidden-import sheets --collect-submodules openpyxl --distpath dist\C3dMcp --workpath dist\_work --specpath dist\_work server\server.py >> "%LOG%" 2>&1 || goto fail
+server\.venv\Scripts\python -m PyInstaller --onefile --noconfirm --name c3d-mcp-server --collect-all mcp --paths server --hidden-import catalog --hidden-import qa --hidden-import bridge_client --hidden-import sewergems --hidden-import watergems --hidden-import sheets --hidden-import client_config --hidden-import filepolicy --hidden-import chatgpt_tunnel --hidden-import tomlkit --collect-submodules openpyxl --distpath dist\C3dMcp --workpath dist\_work --specpath dist\_work server\server.py >> "%LOG%" 2>&1 || goto fail
 
 echo [3/4] installer zip >> "%LOG%"
 copy /y package\install.bat dist\C3dMcp\ >> "%LOG%" 2>&1
-copy /y package\configure_clients.ps1 dist\C3dMcp\ >> "%LOG%" 2>&1
 copy /y package\uninstall.bat dist\C3dMcp\ >> "%LOG%" 2>&1
 copy /y package\INSTALL.txt dist\C3dMcp\ >> "%LOG%" 2>&1
 copy /y CHANGELOG.md dist\C3dMcp\ >> "%LOG%" 2>&1 || goto fail

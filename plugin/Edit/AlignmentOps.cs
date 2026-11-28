@@ -637,7 +637,7 @@ internal static class AlignmentOps
         }
 
         var origin = NeedPt(p, "at", "section_views_create");
-        int columns = IntParam(p, "columns", 5, 1, 100);
+        int columns = WholeParam(p, "columns", 5, 1, 100);
         double dx = DblParam(p, "spacing_x") ?? 80.0, dy = DblParam(p, "spacing_y") ?? 50.0;
         var lines = g.GetSampleLineIds().Cast<ObjectId>()
             .Select(id => (CivilDb.SampleLine)c.Tr.GetObject(id, OpenMode.ForRead))

@@ -107,7 +107,7 @@ internal static class PressureOps
                 }
                 totalLength += a.DistanceTo(b);
             }
-            Describe(c, id, s, what);
+            Describe(c, id, s, what, p);
             created.Add(new { kind = "pipe", id = StrParam(s, "id"), handle = H(id), part = PressureParts.Describe(part) });
         }
 
@@ -135,7 +135,7 @@ internal static class PressureOps
                 ObjectId id;
                 try { id = addToNetwork(at, part); }
                 catch (Exception ex) { throw new ArgumentException($"{what} ({PressureParts.Describe(part)}): {ex.Message}"); }
-                Describe(c, id, s, what);
+                Describe(c, id, s, what, p);
 
                 // Connect the new part's ports, in order, to the pipe ends that meet at its location. Only a call that
                 // returns counts as a connection; a failed one is reported and the next pipe end gets the same port.
@@ -164,8 +164,10 @@ internal static class PressureOps
     }
 
     /// <summary>Optional 'name' and 'description' of a part just added.</summary>
-    private static void Describe(EditContext c, ObjectId id, JsonElement s, string what)
+    private static void Describe(EditContext c, ObjectId id, JsonElement s, string what, JsonElement op = default)
     {
+        if (op.ValueKind == JsonValueKind.Object && Provenance.FromSpec(s, op) is { } tag)
+            Provenance.Write(c.Tr, c.Db, c.Tr.GetObject(id, OpenMode.ForWrite), tag);
         if (StrParam(s, "name") is null && StrParam(s, "description") is null) return;
         var part = (CivilDb.PressurePart)c.Tr.GetObject(id, OpenMode.ForWrite);
         if (StrParam(s, "name") is { Length: > 0 } name)

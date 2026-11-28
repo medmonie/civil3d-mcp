@@ -3,13 +3,15 @@ Civil 3D MCP bridge - quick install (Civil 3D 2024 / 2025 / 2027)
 Needed on this PC: Autodesk Civil 3D 2024, 2025 or 2027 and an MCP client (Claude Desktop, ChatGPT desktop or Codex).
 The package includes the MCP server. Python and the .NET SDK are only needed to build it from source.
 
-1. Close Civil 3D.
+1. Close Civil 3D and quit Claude Desktop completely (tray icon > Quit). install.bat stops while Claude runs, because
+   Claude writes its old settings back over a change made while it is open.
 2. Double-click install.bat. It installs the Civil 3D plug-in and prints the MCP server's full path.
    Do not use "Run as administrator": it installs per user, for the account signed in to this desktop.
-   It also adds the civil3d server to Claude Desktop (classic and Microsoft Store installs) and Codex when they are
-   installed for you, keeping your other servers and backing each file up first. It lists what it changed.
-3. Restart Claude Desktop / Codex fully (quit from the tray). If install.bat listed a client as NOT CHANGED or not
-   found, connect it by hand to the printed server path:
+   It also adds the civil3d server to Claude Desktop (6.x: %LOCALAPPDATA%\Claude-Data\claude_*, plus the classic and
+   older Store locations) and Codex, keeping your other servers (sap2000, revit ...) and backing each file up first.
+   It lists what it changed; the log is install_result.txt next to install.bat.
+3. Start Claude Desktop / Codex again. If install.bat listed a client as FAILED or not installed, connect it by hand
+   to the printed server path:
    - Claude Desktop: Settings > Developer > Edit Config. Merge the "civil3d" entry from
      claude_desktop_config_snippet.json (saved next to the server) into the existing "mcpServers" block - do not
      paste a second "mcpServers" block - then fully quit and restart Claude.
@@ -27,4 +29,4 @@ Permissions
 
 To use ChatGPT in a browser or cloud chat, follow the Secure MCP Tunnel setup in README.md.
 Updating: close Civil 3D and the MCP client, run the new install.bat, then reopen both.
-Uninstall: run uninstall.bat, then remove civil3d from the MCP client's settings.
+Uninstall: quit Claude Desktop, run uninstall.bat (it also removes the civil3d entry from Claude Desktop and Codex).

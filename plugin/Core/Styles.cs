@@ -15,6 +15,7 @@ internal static class Styles
         ["profile_view"] = civ => civ.Styles.ProfileViewStyles,
         ["profile_view_band_set"] = civ => civ.Styles.ProfileViewBandSetStyles,
         ["surface"] = civ => civ.Styles.SurfaceStyles,
+        ["parcel"] = civ => civ.Styles.ParcelStyles,
         ["corridor"] = civ => civ.Styles.CorridorStyles,
         ["pipe"] = civ => civ.Styles.PipeStyles,
         ["structure"] = civ => civ.Styles.StructureStyles,

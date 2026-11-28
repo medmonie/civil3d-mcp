@@ -93,7 +93,7 @@ internal static class CadOps
         if (DblParam(p, "extension_offset") is double exo) ds.Dimexo = exo;
         if (DblParam(p, "extension_beyond") is double exe) ds.Dimexe = exe;
         if (DblParam(p, "text_gap") is double gap) ds.Dimgap = gap;
-        if (Has(p, "decimals")) ds.Dimdec = IntParam(p, "decimals", 2, 0, 8);
+        if (Has(p, "decimals")) ds.Dimdec = WholeParam(p, "decimals", 2, 0, 8);
         if (PositiveParam(p, "overall_scale") is double sc) ds.Dimscale = sc;
         if (PositiveParam(p, "linear_scale") is double lf) ds.Dimlfac = lf;
         if (BoolParam(p, "text_above") is bool above)
@@ -146,6 +146,9 @@ internal static class CadOps
     private static object LinetypeLoad(EditContext c, JsonElement p)
     {
         string file = StrParam(p, "file") ?? (c.Db.Measurement == MeasurementValue.Metric ? "acadiso.lin" : "acad.lin");
+        // A bare file name is looked up on AutoCAD's support path; a path the client spells out is checked like any other.
+        if (Path.IsPathFullyQualified(file)) file = FilePolicy.Read(file, "linetype_load");
+        else if (file.IndexOfAny(new[] { '\\', '/' }) >= 0) throw new ArgumentException("linetype_load: 'file' must be a file name on the support path or a full path.");
         var table = (LinetypeTable)c.Tr.GetObject(c.Db.LinetypeTableId, OpenMode.ForRead);
         var loaded = new List<string>();
         var already = new List<string>();
@@ -327,7 +330,7 @@ internal static class CadOps
     {
         string path = NeedStr(p, "path");
         if (!Path.IsPathFullyQualified(path)) throw new ArgumentException("underlay_attach: path must be a full path.");
-        path = Path.GetFullPath(path);
+        path = FilePolicy.Read(path, "underlay_attach");
         if (!File.Exists(path)) throw new ArgumentException($"underlay_attach: file not found: {path}");
         string ext = Path.GetExtension(path).ToLowerInvariant();
         var at = OptPt(p, "at", "underlay_attach") ?? Point3d.Origin;

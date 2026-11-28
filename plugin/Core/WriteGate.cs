@@ -28,6 +28,7 @@ internal static class WriteGate
             scope = "active drawing; ends when the drawing closes or MCPREVOKE is run",
             howToGrant = "answer Yes to the first edit, or run MCPALLOW in the intended drawing",
             auditLog = Audit.FilePath,
+            files = FilePolicy.Describe(),
         };
     }
 
@@ -70,7 +71,7 @@ internal static class WriteGate
         }
         Grant(doc, "dialog");
         return sw.Elapsed > LateAnswer
-            ? "Editing is now allowed, but this request expired without applying. Use a new request ID if you still want the edit."
+            ? "Editing is now allowed, but this request expired without applying. Send it again if you still want the edit."
             : null;
     }
 }

@@ -1,5 +1,8 @@
 namespace C3dMcpBridge;
 
+/// <summary>The engine refused an edit before doing anything because another one is running: safe to send again.</summary>
+internal sealed class EditBusyException(string message) : InvalidOperationException(message);
+
 /// <summary>
 /// The only code path that changes a drawing. One call = one batch of operations = one document lock and ONE
 /// transaction: either every operation succeeds and the batch is committed, or nothing is changed. dry_run executes
@@ -7,6 +10,9 @@ namespace C3dMcpBridge;
 /// </summary>
 internal static class EditEngine
 {
+    private const string BusyText = "Another MCP edit is still running in Civil 3D (or waiting for the permission dialog). " +
+                                    "Nothing was changed; send this edit again with the same request_id when it finishes.";
+
     private const int MaxOperations = 500;
 
     private static readonly Dictionary<string, Func<EditContext, JsonElement, object>> Ops = new(StringComparer.OrdinalIgnoreCase);
@@ -20,11 +26,21 @@ internal static class EditEngine
         DocumentOps.Register(Ops);
         CadOps.Register(Ops);
         SheetOps.Register(Ops);
+        GeoOps.Register(Ops);
         // Civil 3D
         TerrainOps.Register(Ops);
         AlignmentOps.Register(Ops);
         CorridorOps.Register(Ops);
         GravityOps.Register(Ops);
+        NetworkEditOps.Register(Ops);
+        DataOps.Register(Ops);
+        PropertyOps.Register(Ops);
+        ProvenanceOps.Register(Ops);
+        TinOps.Register(Ops);
+        AlignmentExtraOps.Register(Ops);
+        CadExtraOps.Register(Ops);
+        LabelPackOps.Register(Ops);
+        CommandOps.Register(Ops);
         PressureOps.Register(Ops);
         StyleOps.Register(Ops);
         CivilOps.Register(Ops);
@@ -41,9 +57,7 @@ internal static class EditEngine
 
     public static object Run(JsonElement p)
     {
-        if (_running)
-            throw new InvalidOperationException("Another MCP edit is still running in Civil 3D (or waiting for the permission dialog). " +
-                                                "Nothing was changed; send this edit again with the same request_id when it finishes.");
+        if (_running) throw new EditBusyException(BusyText);
         _running = true;
         try { return RunExclusive(p); }
         finally { _running = false; }
@@ -72,57 +86,84 @@ internal static class EditEngine
 
         // 3. Run every operation in one transaction; the first failure rolls everything back.
         var results = new List<object>();
-        EditContext ctx;
+        EditContext? context = null;
         object? failed = null;
         using (doc.LockDocument())
         {
             target.RequireActive();
-            using (var tr = doc.Database.TransactionManager.StartTransaction())
+            try
             {
-                ctx = new EditContext { Doc = doc, Tr = tr };
-                for (int i = 0; i < ops.Count; i++)
+                using (var tr = doc.Database.TransactionManager.StartTransaction())
                 {
-                    ctx.OpIndex = i + 1;
-                    try
+                    var ctx = context = new EditContext { Doc = doc, Tr = tr };
+                    for (int i = 0; i < ops.Count; i++)
                     {
-                        results.Add(new { index = i + 1, op = names[i], result = Ops[names[i]](ctx, ops[i]) });
-                    }
-                    catch (Exception ex)
-                    {
-                        RunBeforeAbort(ctx);
-                        tr.Abort();
-                        string error = ErrorText(ex);
-                        Audit.Write("edit_failed", new { requestId, drawing = doc.Name, dryRun, summary, failedAt = i + 1, op = names[i], error });
-                        failed = new
+                        ctx.OpIndex = i + 1;
+                        try
                         {
-                            applied = false, dryRun, failedAt = i + 1, op = names[i], error,
-                            note = "Nothing was changed: the whole batch was rolled back.",
-                            completedBeforeFailure = results, warnings = ctx.Warnings,
-                        };
-                        break;
+                            results.Add(new { index = i + 1, op = names[i], result = Ops[names[i]](ctx, ops[i]) });
+                        }
+                        catch (Exception ex)
+                        {
+                            RunBeforeAbort(ctx);
+                            tr.Abort();
+                            string error = ErrorText(ex);
+                            Audit.Write("edit_failed", new { requestId, drawing = doc.Name, dryRun, summary, failedAt = i + 1, op = names[i], error });
+                            failed = new
+                            {
+                                applied = false, dryRun, failedAt = i + 1, op = names[i], error,
+                                note = "Nothing was changed: the whole batch was rolled back.",
+                                completedBeforeFailure = results, warnings = ctx.Warnings,
+                            };
+                            break;
+                        }
                     }
-                }
-                if (failed == null)
-                {
-                    if (dryRun) { RunBeforeAbort(ctx); tr.Abort(); }
-                    else
+                    if (failed == null)
                     {
-                        tr.TransactionManager.QueueForGraphicsFlush();
-                        tr.Commit();
+                        if (dryRun) { RunBeforeAbort(ctx); tr.Abort(); }
+                        else
+                        {
+                            try
+                            {
+                                tr.TransactionManager.QueueForGraphicsFlush();
+                                tr.Commit();
+                            }
+                            catch (Exception ex)
+                            {
+                                // A commit that throws (an object left open, a reactor veto) used to leave this method as a
+                                // bare exception: no receipt, no audit line, and the clean-up below skipped.
+                                RunBeforeAbort(ctx);
+                                try { tr.Abort(); } catch { /* the failed commit already ended the transaction */ }
+                                string error = ErrorText(ex);
+                                Audit.Write("edit_failed", new { requestId, drawing = doc.Name, dryRun, summary, failedAt = "commit", error });
+                                failed = new
+                                {
+                                    applied = false, dryRun, failedAt = "commit", error,
+                                    note = "Every operation ran but Civil 3D refused to commit the batch, so it was rolled back. " +
+                                           "Read the drawing before sending the edit again (with a new request_id).",
+                                    completedBeforeFailure = results, warnings = ctx.Warnings,
+                                };
+                            }
+                        }
                     }
                 }
             }
-            RunAfterEnd(ctx);
+            finally
+            {
+                // "Whatever the outcome" includes an exception on the way out of the transaction.
+                if (context != null) RunAfterEnd(context);
+            }
         }
         if (failed != null) return failed;
+        var done = context!;
 
         // 4. Saving and plotting cannot run inside the transaction; they follow the commit.
-        bool afterCommitSucceeded = dryRun || RunAfterCommit(doc, target, ctx);
+        bool afterCommitSucceeded = dryRun || RunAfterCommit(doc, target, done);
 
-        Audit.Write(dryRun ? "edit_dry_run" : "edit_applied", new { requestId, drawing = doc.Name, summary, operations = ops.Count, warnings = ctx.Warnings.Count });
+        Audit.Write(dryRun ? "edit_dry_run" : "edit_applied", new { requestId, drawing = doc.Name, summary, operations = ops.Count, warnings = done.Warnings.Count });
         return new
         {
-            applied = !dryRun, dryRun, afterCommitSucceeded, drawing = Path.GetFileName(doc.Name), operations = ops.Count, results, warnings = ctx.Warnings,
+            applied = !dryRun, dryRun, afterCommitSucceeded, drawing = Path.GetFileName(doc.Name), operations = ops.Count, results, warnings = done.Warnings,
             note = dryRun ? "Dry run: everything was executed and then rolled back; the drawing is unchanged."
                           : "Committed as one transaction (one UNDO step in Civil 3D).",
         };

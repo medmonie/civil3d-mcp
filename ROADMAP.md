@@ -21,9 +21,9 @@ This file has two parts: what the Civil 3D MCP does today (v0.16.0), and what co
 
 ---
 
-## 1. What it does today (v0.22.0)
+## 1. What it does today (v0.24.0)
 
-72 read actions and 132 edit operations, plus SewerGEMS / WaterGEMS imports and plan & profile sheets, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. A dry run executes and rolls back. Each edit names the drawing it is for and carries a request ID, so it cannot land in the wrong drawing or run twice. Editing needs permission per drawing (`MCPALLOW` or the dialog). Works with Claude, ChatGPT desktop and Codex; ChatGPT in a browser connects read-only. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
+84 read actions and 165 edit operations, plus SewerGEMS / WaterGEMS imports and plan & profile sheets, all through one tool (`civil3d`). Edits run as a single transaction: if anything fails, nothing is changed. A dry run executes and rolls back. Each edit names the drawing it is for and carries a request ID, so it cannot land in the wrong drawing or run twice. Editing needs permission per drawing (`MCPALLOW` or the dialog). Works with Claude, ChatGPT desktop and Codex; ChatGPT in a browser connects read-only. Full parameter list: [docs/ACTIONS.md](docs/ACTIONS.md).
 
 | Area | Read | Create / edit |
 |---|---|---|
@@ -83,9 +83,9 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 |---|---|---|---|
 | 36 | ~~Plan and profile sheets~~ ✅ 0.14 | L | Frames along an alignment, one layout per frame with a rotated plan viewport and the matching profile view, match lines. Replaces #9 with an MCP-native version (Civil 3D's Plan Production is only partly in the API). |
 | 37 | **Sheet index table** | S | Sheet number, title and revision across layouts, drawn as a table. |
-| 38 | **Fields and data tables** | M | Fields in text (sheet number, file name, date) and tables built from object data (pipe schedules, coordinate tables). |
-| 39 | **Geolocation / coordinate system** | S | Read and set the drawing's coordinate system. |
-| 40 | **Audit** | S | Not in the .NET API; would need a command call. |
+| 38 | **Fields and data tables** (fields ✅ 0.24) | M | Fields in text done (`draw_field_text`: file name, dates, author, title, layout or any field). Open: coordinate and other tables built from object data (pipe schedules exist since 0.15). |
+| 39 | **Geolocation / coordinate system** ✅ 0.23 | S | Read and set the drawing's coordinate system; convert to / from longitude-latitude. |
+| 40 | ~~**Audit**~~ ✅ 0.24 | S | `command_run audit` / `audit_fix` (#76). |
 | 46 | **Multi-sheet PDF with mixed paper sizes** | M | AutoCAD's plot engine puts only same-size sheets in one PDF; Autodesk points to the Publish API (DSD) for mixed A1 / A0 sets. |
 | 47 | **"Fit to paper" for a layout PDF** | S | `page_setup_set scale: "fit"` on a layout did not change the PDF in the live test (an A0 layout on A1 paper stayed 1:1). Same-size plotting is correct. |
 
@@ -125,6 +125,45 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 | 67 | ✅ 0.18 **Section volume tables** | `section_volume_tables`. |
 | 68 | ✅ 0.19 **Next from the API review** | `corridor_feature_line_export`, `corridor_points_export`, `get_corridor_targets` / `corridor_targets_set`, `corridor_slope_pattern_add`, `corridor_solids_export`, `surface_definition_add`, `surface_create_from`, `surface_snapshot`, `surface_solids_create`, `catchment_create` / `list_catchments`. |
 
+### API gap packages (from `docs/API_GAP_0.23.md`, 28 Nov 2026)
+
+In the Civil 3D .NET API but not yet in the MCP. About 190 of 995 Civil types are used; these are the gaps that matter.
+Packages are in the suggested order.
+
+| # | Package | Effort | Priority | What it adds |
+|---|---|---|---|---|
+| 69 | ✅ 0.24 **Gravity network edit pack** | M | P1 | Edits after an import without re-importing: break a pipe with a new structure (`Network.BreakPipe`), move parts between networks, disconnect / reconnect, adjust a pipe end, regrade holding the start or end (`SetSlopeHoldStart/End`), resize structures by pipe depths, flow direction. Read `network_trace` (`FindShortestNetworkPath`: upstream / downstream between two parts), connected catchments, Civil 3D's own min / max cover flags (facts only). |
+| 70 | ✅ 0.24 **Write user-defined property values; parcel edits** | S | P1 | `udp_set` for COGO points and parcels (`SetUDPValue`; definitions and reads exist since 0.16 / 0.17). Parcel number, address, tax ID, style. Point groups: delete, lock / unlock points, pending changes. |
+| 71 | ✅ 0.24 **Allowlisted `property_set`** | S–M | P1 | One operation for single Civil setters not covered elsewhere (pipe flow direction, sump depth, alignment reference station and station index, profile update mode, corridor maximum triangle side, region lock mode ...), limited to an allowlist and reported before / after. Closes many small gaps at once; `object_set` stays for name, style, layer. |
+| 72 | ✅ 0.24 **Import provenance (XData)** | S–M | P1 | Write the SewerGEMS / WaterGEMS element ID and import run on every created object (XData / Xrecord), and read it back. Makes #6 band table refresh and #8 model vs drawing reliable instead of name-matched. |
+| 73 | ✅ 0.24 **Pressure run edit pack** | M | P1 | `PressurePipeRun.Break`, remove a bend at a PI or vertical bend at a PVI, follow / reset the reference profile, vertical offset type. WaterGEMS follow-ups: reducers, crosses, hydrant branches. |
+| 74 | ✅ 0.24 **Labels pack** | M | P2 | Spanning pipe labels (plan and profile), crossing pipe profile labels (pressure all versions; gravity 2027 only), pipe / structure / pressure part section labels, depth and offset-elevation labels in profile and section views, alignment label sets (stations, PI, geometry points, design speed, superelevation, equations), profile, sample-line and section label groups, parcel segment, catchment and flow-segment labels. |
+| 75 | ✅ 0.24 **TIN surface editing** | M | P2 | Add / delete lines, swap edges, add / move / delete vertices, set vertex elevations, raise the surface; simplify, smooth (NNI, kriging), minimise flat areas; masks. Reads: triangles, triangle at a point, vertices inside a polyline. For survey surface clean-up. |
+| 76 | ✅ 0.24 (first step) **Command runner (allowlisted)** | L | P2 | A fixed list of Civil 3D / AutoCAD commands run with an UNDO mark, verified afterwards and audited, with its own receipt (it cannot join the single-transaction rollback). Unblocks LandXML export (#11), data shortcuts (#13), mass haul (#20), grading by command (#24), AUDIT (#40), Publish (#46) and Civil 3D's own network / point / parcel tables. |
+| 77 | ✅ 0.24 (part) **Alignments, profiles and corridors, more** | M | P2 | Alignment: starting chainage (reference point and station), reverse, copy to site, polyline from alignment; stations at intervals / geometry points, distance to alignment, cross slope at a station. Profile: update mode, grade at a station. Profile views: split views, stacked views, station / elevation at a point. Superelevation view. Corridor: baseline transitions, region match, link / shape code lists; QTO pay items and quantity reports. |
+| 78 | ✅ 0.24 **Read existing Plan Production and Civil tables** | S | P2 | View frame groups, view frames, match lines and existing Civil 3D tables of the drawing (create is not in the API). |
+| 79 | ✅ 0.24 (part) **AutoCAD extras** | S each | P2 | Fields in text (#38), groups, wipeouts, splines and ellipses, layer filters, Excel-linked tables (`DataLink`); Publish (#46) needs `Publisher` / DSD. |
+| 80 | ✅ 0.24 (compact mode) **Tool description through MCP resources** | M | P2 | Move parameter signatures from the 43 KB tool description to MCP resources / `help` (about 11,000 tokens per message today); optionally expose drawing state as a resource. |
+
+**Done in 0.24 and still open** (live-tested on Civil 3D 2027: `tests\results\v024a.txt` 58 checks,
+`v024b.txt` 41 checks):
+- #70 `parcel_set` is coded but not live-tested (a test drawing has no parcels and the API cannot create them).
+- #74 open: gravity crossing-pipe profile labels (2027 only), pipe / structure / pressure-part section labels, sample
+  line and section label groups, parcel segment, catchment and flow-segment labels. `crossing_pressure_labels_add` is
+  coded but not live-tested (no crossing fixture).
+- #76 first step: an allowlist of command-line commands without dialogs (audit, purge, regen, zoom). LandXML export,
+  data shortcuts and Publish open dialogs and are still open.
+- #77 open: baseline transitions, region match, QTO pay items and reports, superelevation view, stacked profile views.
+  Split profile views are `property_set` settings, not live-tested.
+- #79 open: layer filters, Excel-linked tables (`DataLink`), Publish (#46).
+- #80: compact mode (`C3D_MCP_COMPACT=1`, names only, about 12 % of the size) and multi-topic `help`; MCP resources are
+  still open.
+
+**Version gating.** 38 API types and several members exist in 2027 but not in 2024 (catchment runoff models,
+`CrossingPipeProfileLabel`, pressure-part overrides in profile views, `Alignment.TrackDistanceToAlignment`,
+`FeatureLine.Reverse`, `Pipe.ManningCoefficient` ...). Anything built on them needs a version check; 2025 is still to be
+diffed.
+
 ### P2 — useful
 
 | # | Feature | Effort | Why / notes |
@@ -133,7 +172,7 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 | 10 | **CAD to network** | M | Turn polylines and blocks from a consultant's CAD into a gravity network, using block positions and attribute levels. |
 | 11 | **LandXML import / export** | M | Surface import done in 0.19 (`surface_create_from`). Exchange surfaces, alignments and networks with other software and authorities. |
 | 12 | ✅ 0.19 **Surface from contours / DEM** | M | Build a surface from contour polylines with their elevations, or from a DEM file. |
-| 13 | **Data shortcuts** | M | Create and reference data shortcuts so a network or surface can be shared across drawings. |
+| 13 | **Data shortcuts** | M → L | Create and reference data shortcuts so a network or surface can be shared across drawings. Not in the referenced .NET assemblies (only the `DataShortcutKey` enums): needs the command runner (#76) or a separate data-shortcut assembly, still to be checked in the Civil 3D install folder. |
 | 14 | ✅ 0.19 **Corridor targets** | M | Width and elevation targets (edge of pavement, ditch) from alignments, profiles and polylines. |
 | 15 | ✅ 0.22 **Profile view labels for parts** | S | `profile_view_labels_add`: gravity pipe and structure labels, pressure pipe / fitting / appurtenance labels in a profile view; parts already labelled are skipped. |
 | 16 | ✅ 0.22 **Earthwork volumes for corridors** | M | Material list EG vs corridor surface, then `get_material_volumes` with `from_station` / `to_station`. Corridor surfaces are now rebuilt after each corridor rebuild. |
@@ -145,11 +184,11 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 
 | # | Feature | Effort | Why / notes |
 |---|---|---|---|
-| 20 | **Section view volume tables and mass haul** | L | Material lists and a mass haul diagram for road jobs. Large API surface. |
+| 20 | **Mass haul** | L → blocked | Material lists and section volume tables are done (0.17, 0.18). `MassHaulLine` / `MassHaulView` have no public members: needs the command runner (#76). |
 | 21 | **Automated tests on GitHub** | S | Run the smoke test (catalogue, docs, version) on every push. A live test still needs Civil 3D. |
 | 22 | **Signed installer and update check** | M | Removes the Windows and Civil 3D trust prompts; tells you when a new release is out. |
 | 23 | **Shared core with the Revit MCP** | L | One server package and one installer for Civil 3D and Revit. |
-| 24 | **Grading** | XL | Not in the .NET API. A workaround through feature lines and the COM API is possible but fragile. |
+| 24 | **Grading** | XL | Not in the .NET API (`Grading` has no public members, no `GradingGroup`). A workaround through feature lines, the COM API or the command runner (#76) is possible but fragile. |
 | 25 | **Parcel creation** | XL | Not in the .NET API. Only parcels drawn by a user can be read. |
 | 26 | **Native band content** | XL | Bands can be attached and their height set, but not what they label. Use a template band style, or the drawn band table. |
 
@@ -160,8 +199,11 @@ Effort and priority for each item. **Why** says what it saves or unblocks.
 The MCP gives facts and actions; design checks, quantities and code compliance are done by the AI client (as skills
 kept outside this repository) with the project's criteria.
 
-1. **Data access still missing:** #11 LandXML export and alignment / network import, #13 data shortcuts.
-2. **Round-trips:** #8 model vs drawing differences (facts), #6 band table refresh.
-3. **Reach:** #5 Civil 3D 2026 (2024 / 2025 done in 0.12).
+1. **Edit what was imported:** #69 gravity network edit pack, #70 write user-defined properties, #71 `property_set`.
+2. **Round-trips:** #72 import provenance, then #8 model vs drawing differences (facts) and #6 band table refresh.
+3. **WaterGEMS follow-ups and sheets:** #73 pressure run edits, #74 labels pack.
+4. **Survey and roads:** #75 TIN editing, #77 alignment / profile / corridor extras.
+5. **Beyond the .NET API:** #76 command runner, then #11 LandXML export, #13 data shortcuts, #20 mass haul.
+6. **Reach:** #5 Civil 3D 2026 (2024 / 2025 done in 0.12); #80 smaller tool description.
 
 Effort figures are estimates. Anything marked XL depends on what Autodesk adds to the API.

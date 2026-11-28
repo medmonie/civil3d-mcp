@@ -315,7 +315,7 @@ if __name__ == "__main__":
     with_fake(split_tools)
     with_fake(read_only)
     # offline importer tests (each prints its own checks)
-    for script in ("sewergems_test.py", "watergems_test.py", "sheets_test.py"):
+    for script in ("sewergems_test.py", "watergems_test.py", "sheets_test.py", "policy_test.py"):
         run = subprocess.run([sys.executable, str(ROOT / "tests" / script)], capture_output=True, text=True)
         assert run.returncode == 0, run.stdout + run.stderr
         print(f"{script}: ok")

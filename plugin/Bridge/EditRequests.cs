@@ -96,7 +96,8 @@ internal static class EditRequests
                 lock (Gate)
                 {
                     entry.State = "error";
-                    entry.Retryable = ex is CadQueueTimeoutException;
+                    // Both prove the edit never started: it timed out in the queue, or the engine refused it as busy.
+                    entry.Retryable = ex is CadQueueTimeoutException or EditBusyException;
                     entry.Error = ErrorText(ex);
                 }
                 throw;
@@ -106,6 +107,20 @@ internal static class EditRequests
             {
                 var result = JsonSerializer.SerializeToElement(reply, Json.Out);
                 bool? applied = Flag(result, "applied");
+                if (PermissionRefused(result, out string? reason))
+                {
+                    // Nothing ran: the user said No, has not answered yet, or answered too late. Recording that as the
+                    // edit's final result would make this request_id answer "not granted" for ever, even after the
+                    // user allows editing (MCPALLOW or the dialog). Keep the identity, leave it open for a resend.
+                    lock (Gate)
+                    {
+                        entry.State = "error";
+                        entry.Retryable = true;
+                        entry.Applied = false;
+                        entry.Error = reason ?? "Editing is not allowed in this drawing yet.";
+                    }
+                    return result;
+                }
                 int size = Encoding.UTF8.GetByteCount(result.GetRawText());
                 lock (Gate)
                 {
@@ -142,6 +157,16 @@ internal static class EditRequests
         {
             Leave();
         }
+    }
+
+    /// <summary>The engine's "permission not granted" receipt (see EditEngine.RunExclusive), with its reason.</summary>
+    private static bool PermissionRefused(JsonElement e, out string? reason)
+    {
+        reason = null;
+        if (e.ValueKind != JsonValueKind.Object || !e.TryGetProperty("permission", out var v) ||
+            v.ValueKind != JsonValueKind.String || v.GetString() != "not granted") return false;
+        if (e.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String) reason = r.GetString();
+        return true;
     }
 
     /// <summary>A true/false property of a reply; null when absent or not a boolean (never throws).</summary>

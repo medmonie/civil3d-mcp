@@ -436,7 +436,7 @@ internal static class GeometryOps
         var opts = new CivilDb.MultipleProfileViewsCreationOptions
         {
             LengthOfEachView = NeedPositive(p, "length"),
-            MaxViewInRowOrColumn = IntParam(p, "per_row", 5, 1, 1000),
+            MaxViewInRowOrColumn = WholeParam(p, "per_row", 5, 1, 1000),
             GapBetweenViewsInRow = DblParam(p, "gap_x") ?? 50,
             GapBetweenViewsInColumn = DblParam(p, "gap_y") ?? 50,
             DrawOrder = Choice(p, "order", "rows", "rows", "columns") == "columns" ? Autodesk.Civil.ProfileViewPlotType.ByColumns : Autodesk.Civil.ProfileViewPlotType.ByRows,
@@ -521,10 +521,16 @@ internal static class GeometryOps
 
     // ---------------------------------------------------------------- point export
 
+    // A point file is text whose content the client controls (point descriptions), so its extension is restricted to
+    // data formats: with a free extension this operation could drop a script where Windows or AutoCAD runs it.
+    private static readonly string[] PointFileExtensions = { ".txt", ".csv", ".prn", ".pnt", ".xyz", ".nez", ".auf", ".asc", ".dat" };
+
     /// <summary>Write COGO points (all, or one point group) to a file in a point file format. Runs after the edit commits.</summary>
     private static object PointsExport(EditContext c, JsonElement p)
     {
-        string path = NeedFullPath(p, "path", "points_export");
+        string path = NeedFullPath(p, "path", "points_export", write: true);
+        if (!PointFileExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+            throw new ArgumentException($"points_export: the file must end in {string.Join(", ", PointFileExtensions)}.");
         if (File.Exists(path) && BoolParam(p, "overwrite") != true)
             throw new ArgumentException($"points_export: {path} exists; pass overwrite: true.");
         string? dir = Path.GetDirectoryName(path);

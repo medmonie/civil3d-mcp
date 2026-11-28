@@ -228,12 +228,12 @@ internal static class CivilOps
             for (int i = 0; i < specs.Count; i++)
             {
                 var s = specs[i];
-                ranges.Add((NeedDbl(s, "min"), NeedDbl(s, "max"), (short)IntParam(s, "color", Palette[i % Palette.Length], 1, 255)));
+                ranges.Add((NeedDbl(s, "min"), NeedDbl(s, "max"), (short)WholeParam(s, "color", Palette[i % Palette.Length], 1, 255)));
             }
         }
         else
         {
-            int count = IntParam(p, "count", 8, 1, 64);
+            int count = WholeParam(p, "count", 8, 1, 64);
             double lo, hi;
             if (type == "elevations") { lo = props.MinimumElevation; hi = props.MaximumElevation; }
             else { lo = 0; hi = DblParam(p, "max_slope") ?? 30.0; }   // percent; the API gives no surface maximum slope

@@ -308,6 +308,9 @@ internal static class GeometryRead
         return (x, y) => DataRead.Elev(tin, x, y);
     }
 
+    /// <summary>Most surface samples one material may take in get_material_volumes' own computation.</summary>
+    private const double MaxSurfaceSamples = 2_000_000;
+
     /// <summary>One surface material: area at each sample line between its surfaces, and average-end-area volumes.</summary>
     private static object ComputeMaterial(Transaction tr, CivilDb.QTOMaterial m, List<CivilDb.SampleLine> lines, CivilDb.Alignment al, double step)
     {
@@ -333,6 +336,7 @@ internal static class GeometryRead
         }), StringComparer.OrdinalIgnoreCase);
         tins = sampled;
         var rows = new List<(string line, double station, double a1, double a2)>();
+        double budget = MaxSurfaceSamples;   // per material; a double so that an oversized ratio cannot overflow
         foreach (var sl in lines)
         {
             var v = sl.Vertices.Cast<CivilDb.SampleLineVertex>().Select(x => x.Location).ToList();
@@ -340,7 +344,14 @@ internal static class GeometryRead
             for (int k = 0; k + 1 < v.Count; k++)
             {
                 double len = Math.Sqrt(Math.Pow(v[k + 1].X - v[k].X, 2) + Math.Pow(v[k + 1].Y - v[k].Y, 2));
-                int n = Math.Max(1, (int)Math.Ceiling(len / step));
+                // 'step' comes from the caller and this runs on Civil 3D's main thread: a tiny step would freeze the
+                // application (and a ratio beyond int wraps to a single sample, i.e. a silently wrong answer).
+                double wanted = Math.Ceiling(len / step);
+                budget -= wanted;
+                if (!(budget >= 0))
+                    throw new ArgumentException($"get_material_volumes: step {step} needs more than {MaxSurfaceSamples:N0} samples for this group. " +
+                                                "Use a larger step, or from_station / to_station for one stretch.");
+                int n = Math.Max(1, (int)wanted);
                 double? prev1 = null, prev2 = null;
                 for (int i = 0; i <= n; i++)
                 {

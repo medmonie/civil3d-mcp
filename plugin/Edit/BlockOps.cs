@@ -128,6 +128,7 @@ internal static class BlockOps
         if (!Path.IsPathFullyQualified(path)) throw new ArgumentException($"{op}: path must be a full path such as C:\\Standards\\A1 title.dwg.");
         if (!new[] { ".dwg", ".dwt", ".dxf" }.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
             throw new ArgumentException($"{op}: the file must be a .dwg, .dwt or .dxf.");
+        path = FilePolicy.Read(path, op);
         if (!File.Exists(path)) throw new ArgumentException($"{op}: file not found: {path}");
         var side = new Database(false, true);
         try

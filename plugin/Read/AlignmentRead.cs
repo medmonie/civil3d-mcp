@@ -133,6 +133,8 @@ internal static class AlignmentRead
             {
                 alignment = a.Name, profile = pr.Name, station,
                 elevation = R3(pr.ElevationAt(station)),
+                gradePercent = Safe(() => Math.Round(pr.GradeAt(station) * 100, 4)),
+                stationLabel = Safe(() => a.GetStationStringWithEquations(station)),
                 stationRange = new[] { R3(pr.StartingStation), R3(pr.EndingStation) },
             };
         });

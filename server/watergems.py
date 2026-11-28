@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid5
 
+import filepolicy
 from bridge_client import EDIT_TIMEOUT, BridgeError, call, drawing_target, edit_request_id
 
 MAX_BATCH_OPERATIONS = 500
@@ -90,7 +91,7 @@ def _sheet(book: Any, name: str, duplicates: list[str] | None = None) -> dict[st
         keys.append(key if key not in keys else "")      # the first of duplicate columns wins
     out: dict[str, dict[str, Any]] = {}
     reported: set[str] = set()
-    for r in rows:
+    for r in filepolicy.bounded(rows, f"sheet '{name}'"):
         row = {k: v for k, v in zip(keys, r) if k}
         label = row.get("label")
         if label in (None, ""):
@@ -115,9 +116,7 @@ def _active(row: dict[str, Any]) -> bool:
 def read(params: dict[str, Any]) -> dict[str, Any]:
     import openpyxl   # only needed for imports
 
-    path = Path(str(params.get("path") or "")).expanduser()
-    if not params.get("path") or not path.is_file():
-        raise ValueError(f"path: WaterGEMS workbook not found: {params.get('path')}")
+    path = filepolicy.readable(params.get("path"), "path (the WaterGEMS workbook)")
     book = openpyxl.load_workbook(path, read_only=True, data_only=True)
     try:
         duplicates: list[str] = []
@@ -713,13 +712,20 @@ def build(params: dict[str, Any]) -> dict[str, Any]:
     if plan["problems"]:
         return {"built": False, "problems": plan["problems"], "note": "Fix these in WaterGEMS (or the export) first."}
     content, pieces = _network_ops(plan, o)
+    # Import provenance (roadmap #72): each part keeps its WaterGEMS-derived id, readable with get_source_tags.
+    for group in content:
+        for key in ("pipes", "fittings", "appurtenances"):
+            for item in group.get(key, []):
+                if item.get("id"):
+                    item["source_id"] = str(item["id"])
     differences = compare(plan, target, o["cad_pipe_layers"]) if o["cad_pipe_layers"] else None   # before the network exists
     net = o["network"]
     h = float(o["label_height_mm"])
     core_ops: list[dict[str, Any]] = [
         {"op": "pressure_network_create", "name": net, "parts_list": o["parts_list"],
          "description": f"From WaterGEMS: {Path(plan['source']).name}"},
-        {"op": "pressure_add", "network": net, **content[0]},
+        {"op": "pressure_add", "network": net, **content[0],
+         "source": f"WaterGEMS: {Path(plan['source']).name}", "run": f"import {request_id}"},
         {"op": "label_style_create", "kind": "pressure_pipe_label", "name": o["pipe_label_style"], "if_exists": "replace",
          "components": [{"name": "Size", "text": "<[Description(CP)]>", "height": h, "attachment": "BottomCenter", "y_offset": 1.0}]},
         {"op": "label_style_create", "kind": "pressure_appurtenance_label", "name": o["valve_label_style"], "if_exists": "replace",

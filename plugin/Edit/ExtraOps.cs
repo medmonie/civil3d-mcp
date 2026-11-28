@@ -387,12 +387,59 @@ internal static class ExtraOps
             if (e.ValueKind != JsonValueKind.Array || e.GetArrayLength() != 2) throw new ArgumentException("pressure_run_edit: vertical_bends are [station, elevation].");
             vbends.Add(H(run.AddVerticalBendByPVI(e[0].GetDouble(), e[1].GetDouble())));
         }
+        // Roadmap #73: remove bends, follow a profile, offset type, break the run.
+        int removed = 0, removedV = 0;
+        foreach (var pt in Has(p, "remove_bends") ? PtList(p, "remove_bends", "pressure_run_edit remove_bends", 1, 500) : new())
+        { run.RemoveBendByPI(new Point2d(pt.X, pt.Y)); removed++; }
+        foreach (var e in ArrParam(p, "remove_vertical_bends", 500))
+        {
+            if (e.ValueKind != JsonValueKind.Array || e.GetArrayLength() != 2) throw new ArgumentException("pressure_run_edit: remove_vertical_bends are [station, elevation].");
+            run.RemoveVerticalBendByPVI(e[0].GetDouble(), e[1].GetDouble());
+            removedV++;
+        }
+        CivilDb.PressurePipeRunVerticalOffsetType? OffsetType(string key) => StrParam(p, key) switch
+        {
+            null => null,
+            var t when SameName(t, "cut_length") => CivilDb.PressurePipeRunVerticalOffsetType.CutLength,
+            var t when SameName(t, "offset_at_bends") => CivilDb.PressurePipeRunVerticalOffsetType.OffsetAtBends,
+            var t when SameName(t, "offset_at_fitting") => CivilDb.PressurePipeRunVerticalOffsetType.OffsetAtFitting,
+            var t => throw new ArgumentException($"pressure_run_edit: {key} '{t}' is not cut_length, offset_at_bends or offset_at_fitting."),
+        };
+        string? followed = null;
+        if (StrParam(p, "follow_profile") is string profName)
+        {
+            if (run.AlignmentId.IsNull) throw new ArgumentException($"pressure_run_edit: run '{run.Name}' has no alignment, so it cannot follow a profile.");
+            var al = (CivilDb.Alignment)c.Tr.GetObject(run.AlignmentId, OpenMode.ForRead);
+            var prof = FindProfile(c.Tr, al, profName);
+            double offset = DblParam(p, "offset") ?? 0;
+            bool keep = BoolParam(p, "keep_follow") ?? true;
+            if (OffsetType("offset_type") is { } ot) run.FollowProfile(prof.ObjectId, ot, offset, keep);
+            else run.FollowProfile(prof.ObjectId, offset, keep);
+            followed = prof.Name;
+        }
+        else if (OffsetType("offset_type") is { } only) run.SetVerticalOffsetType(only);
+        if (BoolParam(p, "reset_reference_profile") ?? false) run.ResetReferenceProfile();
         if (otherName != null)
         {
             if (other == null) throw new ArgumentException($"Pipe run '{otherName}' not found in '{net.Name}'.");
             run.Merge(other);
         }
-        return new { network = net.Name, run = runName, bends, verticalBends = vbends, merged = otherName };
+        string? brokenInto = null;
+        if (Has(p, "break_at"))
+        {
+            var at = NeedPt(p, "break_at", "pressure_run_edit");
+            string newName = StrParam(p, "new_run_name") ?? run.Name + " (2)";
+            var second = run.Break(new Point2d(at.X, at.Y), newName)
+                         ?? throw new InvalidOperationException("pressure_run_edit: Civil 3D did not break the run.");
+            brokenInto = second.Name;
+        }
+        return new
+        {
+            network = net.Name, run = run.Name, bends, verticalBends = vbends, merged = otherName,
+            bendsRemoved = removed, verticalBendsRemoved = removedV, followsProfile = followed,
+            referenceProfile = NameOf(c.Tr, () => run.ReferenceProfileId), verticalOffsetType = Safe(() => run.VerticalOffsetType.ToString()),
+            verticalOffset = Safe(() => R3(run.VerticalOffset)), newRun = brokenInto,
+        };
     }
 
     // ---------------------------------------------------------------- section view tables

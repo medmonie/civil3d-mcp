@@ -72,6 +72,43 @@ def _check_cancelled() -> None:
         raise BridgeError("The MCP call was cancelled before this Civil 3D request was sent.")
 
 
+CANCEL_POLL_SECONDS = 0.5
+
+
+def _read_reply(sock: socket.socket, timeout: float, *, abandon_on_cancel: bool) -> bytes:
+    """One newline-terminated reply, read against a single monotonic deadline.
+
+    A socket timeout alone applies to each recv, so a reply that trickles in could keep the call alive far beyond
+    'timeout'. The deadline bounds the whole wait.
+
+    A read can also be given up when the MCP client cancels the call: the worker thread then returns within
+    CANCEL_POLL_SECONDS instead of sitting on the socket until the deadline. An edit is never given up this way,
+    because Civil 3D may already be applying it and the caller needs its outcome.
+    """
+    deadline = time.monotonic() + timeout
+    stop = request_cancelled.get() if abandon_on_cancel else None
+    buffer = bytearray()
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise socket.timeout()
+        sock.settimeout(min(remaining, CANCEL_POLL_SECONDS) if stop is not None else remaining)
+        try:
+            chunk = sock.recv(65536)
+        except socket.timeout:
+            if stop is not None and stop.is_set():
+                raise BridgeError("The MCP call was cancelled while waiting for Civil 3D; this read was abandoned.") from None
+            continue   # the deadline check above ends the wait
+        if not chunk:
+            return bytes(buffer)   # the caller reports a missing or incomplete reply
+        buffer += chunk
+        end = buffer.find(b"\n")
+        if end >= 0:
+            return bytes(buffer[:end + 1])
+        if len(buffer) > MAX_REPLY_BYTES:
+            return bytes(buffer)
+
+
 def call(method: str, params: dict[str, Any] | None = None, timeout: float = READ_TIMEOUT) -> Any:
     _check_cancelled()
     params = dict(params or {})
@@ -123,11 +160,10 @@ def call(method: str, params: dict[str, Any] | None = None, timeout: float = REA
                     "and the original target before retrying.") if method == "edit" else ""
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
-            sock.settimeout(timeout)
+            sock.settimeout(min(timeout, 30.0))
             _check_cancelled()
             sock.sendall(frame)
-            with sock.makefile("rb") as reply_file:
-                line = reply_file.readline(MAX_REPLY_BYTES + 1)
+            line = _read_reply(sock, timeout, abandon_on_cancel=method != "edit")
     except socket.timeout:
         raise BridgeError(f"Civil 3D did not answer within {timeout:.0f} s.{edit_outcome}") from None
     except OSError as exc:

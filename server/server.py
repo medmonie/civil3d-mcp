@@ -5,6 +5,8 @@ The default `civil3d(action, params)` tool reads and edits. Edits require permis
 Pass --read-only to expose only `civil3d_read`.
 
 Set C3D_MCP_SPLIT=1 to expose separate read and edit tools in a regular session.
+--configure-clients [exe] / --remove-clients add or remove civil3d in Claude Desktop and Codex (install.bat).
+--run-chatgpt-tunnel starts OpenAI's tunnel-client with this server, read-only (ChatGPT in a browser).
 """
 from __future__ import annotations
 
@@ -219,6 +221,27 @@ def create_server(*, read_only: bool = False) -> FastMCP:
     return mcp
 
 
+MIN_SDK = (1, 19)
+
+
+def _require_sdk() -> None:
+    """Refuse to start on an MCP SDK older than 1.19: 1.9 - 1.18 serialise a CallToolResult(isError=True) as plain text
+    with isError=false, so a denied or rolled-back edit would reach the client as a success (audit 0.23 H-1)."""
+    import importlib.metadata as metadata
+    try:
+        text = metadata.version("mcp")
+    except metadata.PackageNotFoundError:
+        return                                     # frozen exe without metadata: built from requirements.txt
+    parts = []
+    for piece in text.split(".")[:2]:
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    if tuple(parts) < MIN_SDK:
+        print(f"Civil 3D MCP needs the MCP Python SDK {MIN_SDK[0]}.{MIN_SDK[1]} or later (found {text}): older versions "
+              "report failed edits as successes. Run: pip install -r requirements.txt", file=sys.stderr)
+        sys.exit(2)
+
+
 def run_stdio(mcp: FastMCP) -> None:
     # The SDK wraps and closes its stdin/stdout buffers on disconnect. Give it
     # separate buffers so the bundled launcher can still flush the original streams.
@@ -235,6 +258,31 @@ def run_stdio(mcp: FastMCP) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Civil 3D stdio MCP server")
     parser.add_argument("--read-only", action="store_true", help="Expose only drawing reads and checks, even when C3D_MCP_SPLIT is set.")
-    run_stdio(create_server(read_only=parser.parse_args().read_only))
+    parser.add_argument("--configure-clients", nargs="?", const="", metavar="COMMAND",
+                        help="add civil3d to Claude Desktop and Codex (COMMAND: path of the installed server; default this one)")
+    parser.add_argument("--remove-clients", action="store_true", help="remove civil3d from Claude Desktop and Codex")
+    parser.add_argument("--run-chatgpt-tunnel", action="store_true",
+                        help="run OpenAI's tunnel-client with this server, read-only, for ChatGPT in a browser")
+    cli, unknown = parser.parse_known_args()
+    if unknown:
+        # e.g. a server.py path left in the client's config from a source install: starting anyway beats a client
+        # that only reports "could not start"; install.bat removes such leftovers.
+        print(f"Ignoring unknown arguments: {' '.join(unknown)}", file=sys.stderr)
+    if cli.run_chatgpt_tunnel:
+        import chatgpt_tunnel
+        sys.exit(chatgpt_tunnel.run())
+    if cli.configure_clients is not None or cli.remove_clients:
+        import client_config
+        if cli.remove_clients:
+            sys.exit(client_config.run(None))
+        if cli.configure_clients:
+            entry = {"command": cli.configure_clients}
+        elif getattr(sys, "frozen", False):
+            entry = {"command": sys.executable}
+        else:
+            entry = {"command": sys.executable, "args": [os.path.abspath(__file__)]}
+        sys.exit(client_config.run(entry))
+    _require_sdk()
+    run_stdio(create_server(read_only=cli.read_only))
 else:
     mcp = create_server()

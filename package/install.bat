@@ -1,8 +1,23 @@
 @echo off
+rem Civil 3D MCP installer: the plugin bundle (Civil 3D 2024 / 2025 / 2027) and the server exe, then the "civil3d" entry
+rem in Claude Desktop and Codex (done by the server exe itself, no PowerShell script). Log: install_result.txt
 setlocal
 cd /d "%~dp0"
+set "LOG=%~dp0install_result.txt"
+echo Civil 3D MCP install  %DATE% %TIME% > "%LOG%"
+set "CLAUDE_OPEN="
+for %%A in (%*) do if /i "%%~A"=="/claude_open" set "CLAUDE_OPEN=1"
 echo Closing Civil 3D is required if it is running (the plugin DLL gets replaced).
-tasklist /fi "imagename eq acad.exe" | find /i "acad.exe" >nul && (echo Please close Civil 3D and run this again. & pause & exit /b 1)
+tasklist /fi "imagename eq acad.exe" | find /i "acad.exe" >nul && (echo Please close Civil 3D and run this again. & echo RESULT=STOPPED: Civil 3D running >> "%LOG%" & pause & exit /b 1)
+rem Claude Desktop keeps its settings in memory and writes them back over an entry added while it runs; it also holds
+rem the server exe open. It must be quit first (tray icon > Quit).
+if not defined CLAUDE_OPEN tasklist /fi "imagename eq claude.exe" | find /i "claude.exe" >nul && (
+  echo Claude Desktop is running. Quit it completely ^(tray icon ^> Quit, not just the window^), then run install.bat again.
+  echo ^(install.bat /claude_open installs anyway, but Claude may overwrite the new entry.^)
+  echo RESULT=STOPPED: Claude Desktop running >> "%LOG%"
+  pause
+  exit /b 1
+)
 rem Per-user install: %APPDATA% and %LOCALAPPDATA% belong to the account this window runs as. "Run as administrator"
 rem with another account's credentials (common on servers and domain controllers) would install for that account.
 set "C3D_DESKTOP_USER="
@@ -18,15 +33,24 @@ pause
 exit /b 1
 :user_ok
 echo Installing for %USERDOMAIN%\%USERNAME% (%APPDATA% and %LOCALAPPDATA%).
+echo ACCOUNT %USERDOMAIN%\%USERNAME% >> "%LOG%"
+rem Files from a downloaded zip carry the internet mark, which can stop Civil 3D loading the plugin.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem -LiteralPath '%~dp0' -Recurse -File | Unblock-File" >> "%LOG%" 2>&1
 
 set "BUNDLE=%APPDATA%\Autodesk\ApplicationPlugins\C3dMcpBridge.bundle"
 set "C3D_INSTALL_DIR=%LOCALAPPDATA%\C3dMcpBridge"
-xcopy /e /i /y "bundle\C3dMcpBridge.bundle" "%BUNDLE%" >nul || (echo Plugin copy failed & pause & exit /b 1)
+xcopy /e /i /y "bundle\C3dMcpBridge.bundle" "%BUNDLE%" >nul || (echo Plugin copy failed & echo RESULT=FAILED: plugin copy >> "%LOG%" & pause & exit /b 1)
 if not exist "%C3D_INSTALL_DIR%" mkdir "%C3D_INSTALL_DIR%"
-copy /y "c3d-mcp-server.exe" "%C3D_INSTALL_DIR%\" >nul || (echo Server copy failed & pause & exit /b 1)
+copy /y "c3d-mcp-server.exe" "%C3D_INSTALL_DIR%\" >nul || (echo Server copy failed: if an MCP client is running it, quit the client and try again. & echo RESULT=FAILED: server copy >> "%LOG%" & pause & exit /b 1)
+echo PLUGIN %BUNDLE% >> "%LOG%"
+echo SERVER %C3D_INSTALL_DIR%\c3d-mcp-server.exe >> "%LOG%"
 
 set "C3D_CODEX_SNIP=%C3D_INSTALL_DIR%\codex_mcp_config_snippet.toml"
-powershell -NoProfile -Command "$ErrorActionPreference = 'Stop'; $exe = Join-Path $env:C3D_INSTALL_DIR 'c3d-mcp-server.exe'; $command = ConvertTo-Json -InputObject $exe -Compress; [IO.File]::WriteAllLines($env:C3D_CODEX_SNIP, [string[]]@('[mcp_servers.civil3d]', ('command = ' + $command)), [Text.UTF8Encoding]::new($false))" || (echo Codex configuration snippet could not be written & pause & exit /b 1)
+> "%C3D_CODEX_SNIP%" echo [mcp_servers.civil3d]
+>> "%C3D_CODEX_SNIP%" echo command = "%C3D_INSTALL_DIR:\=\\%\\c3d-mcp-server.exe"
+>> "%C3D_CODEX_SNIP%" echo.
+>> "%C3D_CODEX_SNIP%" echo [mcp_servers.civil3d.env]
+>> "%C3D_CODEX_SNIP%" echo C3D_MCP_SPLIT = "1"
 
 set "SNIP=%C3D_INSTALL_DIR%\claude_desktop_config_snippet.json"
 > "%SNIP%" echo {
@@ -39,11 +63,18 @@ echo Installed. Plugin: %BUNDLE%
 echo Server:  "%C3D_INSTALL_DIR%\c3d-mcp-server.exe"
 echo.
 echo MCP clients on this PC (the civil3d entry is added or updated; other servers are kept; each file is backed up first):
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0configure_clients.ps1" -Exe "%C3D_INSTALL_DIR%\c3d-mcp-server.exe"
-if errorlevel 1 echo   The MCP clients could not be configured automatically: add the snippets below by hand.
+set "CLIENTS=%TEMP%\c3dmcp_clients_%RANDOM%.txt"
+"%C3D_INSTALL_DIR%\c3d-mcp-server.exe" --configure-clients "%C3D_INSTALL_DIR%\c3d-mcp-server.exe" > "%CLIENTS%" 2>&1
+set "CRC=%ERRORLEVEL%"
+type "%CLIENTS%"
+type "%CLIENTS%" >> "%LOG%"
+del /q "%CLIENTS%" 2>nul
+echo CLIENTS exit %CRC% >> "%LOG%"
+if not "%CRC%"=="0" echo   Some client settings could not be changed: add the snippets below by hand.
+echo RESULT=OK >> "%LOG%"
 echo.
-echo   Claude Desktop / Codex: fully quit and restart them to load the server.
-echo   If a client above says NOT CHANGED or not found, add the block by hand:
+echo   Start Claude Desktop / Codex again to load the server.
+echo   If a client above says FAILED or not installed, add the block by hand:
 echo     Claude Desktop: Settings ^> Developer ^> Edit Config, merge "%SNIP%" into mcpServers
 echo     Codex: add "%C3D_CODEX_SNIP%" to ~/.codex/config.toml
 echo   ChatGPT desktop: Settings ^> MCP servers ^> Add server, name civil3d, STDIO,

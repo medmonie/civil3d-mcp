@@ -22,13 +22,13 @@ internal static class DocumentOps
     // ---------------------------------------------------------------- file paths
 
     /// <summary>The 'path' parameter as a full path with one of the given extensions.</summary>
-    private static string FullPath(JsonElement p, string op, params string[] extensions)
+    private static string FullPath(JsonElement p, string op, bool write, params string[] extensions)
     {
         string path = NeedStr(p, "path");
         if (!Path.IsPathFullyQualified(path)) throw new ArgumentException($"{op}: path must be a full path such as C:\\Projects\\file{extensions[0]}.");
         if (!extensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
             throw new ArgumentException($"{op}: the file must end in {string.Join(" or ", extensions)}.");
-        return Path.GetFullPath(path);
+        return write ? FilePolicy.Write(path, op) : FilePolicy.Read(path, op);
     }
 
     /// <summary>A file about to be written: its folder must exist, and an existing file needs overwrite: true.</summary>
@@ -52,7 +52,7 @@ internal static class DocumentOps
 
     private static object XrefAttach(EditContext c, JsonElement p)
     {
-        string path = FullPath(p, "xref_attach", ".dwg");
+        string path = FullPath(p, "xref_attach", false, ".dwg");
         if (!File.Exists(path)) throw new ArgumentException($"xref_attach: file not found: {path}");
         string name = StrParam(p, "name") ?? Path.GetFileNameWithoutExtension(path);
         var bt = (BlockTable)c.Tr.GetObject(c.Db.BlockTableId, OpenMode.ForRead);
@@ -71,7 +71,7 @@ internal static class DocumentOps
     {
         string format = Choice(p, "format", "dwg", "dwg", "dxf");
         bool copy = BoolParam(p, "copy") ?? false;
-        string target = Has(p, "path") ? FullPath(p, "drawing_save", "." + format) : c.Doc.Name;
+        string target = Has(p, "path") ? FullPath(p, "drawing_save", true, "." + format) : c.Doc.Name;
         bool inPlace = SameName(target, c.Doc.Name);
 
         string mode;
@@ -141,7 +141,7 @@ internal static class DocumentOps
             var files = new List<string>();
             foreach (var l in layouts)
             {
-                string file = Path.Combine(folder, $"{stem} - {FileSafe(l)}.pdf");
+                string file = FilePolicy.Write(Path.Combine(folder, $"{stem} - {FileSafe(l)}.pdf"), "plot_pdf");
                 if (File.Exists(file) && !(BoolParam(p, "overwrite") ?? false))
                     throw new ArgumentException($"plot_pdf: {file} already exists (pass overwrite: true to replace it).");
                 files.Add(file);
@@ -150,7 +150,7 @@ internal static class DocumentOps
             return new { queued = true, files, layouts, note = $"One PDF per layout with '{PdfPlotter}', after the batch is committed." };
         }
 
-        string target = FullPath(p, "plot_pdf", ".pdf");
+        string target = FullPath(p, "plot_pdf", true, ".pdf");
         CheckWritable(p, "plot_pdf", target);
         if (layouts == null)
         {

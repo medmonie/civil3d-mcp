@@ -40,8 +40,9 @@ internal static class BridgeServer
 
         _token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         SessionId = Guid.NewGuid();
-        _listener = new TcpListener(IPAddress.Loopback, 0);   // 127.0.0.1 only, never 0.0.0.0
-        _listener.Start();
+        var started = new TcpListener(IPAddress.Loopback, 0);   // 127.0.0.1 only, never 0.0.0.0
+        started.Start();   // throws before _listener is set, so a later Start() can try again
+        _listener = started;
         _cts = new CancellationTokenSource();
 
         // Every instance announces itself in bridge-<pid>.json. Only one is the MCP target (bridge.json): a second
@@ -51,7 +52,7 @@ internal static class BridgeServer
         if (owner == null || owner.Value.pid == Environment.ProcessId) WriteBridgeFile();
 
         var ct = _cts.Token;
-        _ = Task.Run(() => AcceptLoop(ct));
+        _ = Task.Run(() => AcceptLoop(started, ct));
     }
 
     /// <summary>False when another running Civil 3D instance is the MCP target.</summary>
@@ -143,9 +144,11 @@ internal static class BridgeServer
 
     public static void Stop()
     {
+        var listener = _listener;
+        _listener = null;   // first: the accept loop reads this to tell a shutdown from a failed accept
         try { _cts?.Cancel(); } catch { /* shutting down */ }
-        try { _listener?.Stop(); } catch { /* shutting down */ }
-        _listener = null;
+        try { listener?.Stop(); } catch { /* shutting down */ }
+        // _cts is not disposed: connection handlers still hold its token until they notice the cancellation.
         try { File.Delete(InstanceFile(Environment.ProcessId)); } catch { /* best effort */ }
         try
         {
@@ -164,16 +167,38 @@ internal static class BridgeServer
         ? "Civil 3D MCP bridge: not running."
         : $"Civil 3D MCP bridge v{BridgeInfo.Version} listening on 127.0.0.1:{Port} (" +
           $"UI context: {(MainThread.HasUiContext ? "yes" : "NO")}; editing: {(WriteGate.Granted ? "allowed for the active drawing" : "not allowed yet")}). " +
+          (_acceptError is string failing ? $"WARNING: the listener is failing to accept connections: {failing}. " : "") +
           (IsTarget ? $"This instance is the MCP target. Connection details: {BridgeFile}"
                     : $"Another Civil 3D instance (pid {TargetInstance()?.pid}) is the MCP target; run MCPSTATUS here to make this one the target.");
 
-    private static async Task AcceptLoop(CancellationToken ct)
+    /// <summary>Why the last accept failed (shown by MCPSTATUS); null while the listener is healthy.</summary>
+    private static volatile string? _acceptError;
+
+    private static async Task AcceptLoop(TcpListener listener, CancellationToken ct)
     {
+        int failures = 0;
         while (!ct.IsCancellationRequested)
         {
             TcpClient client;
-            try { client = await _listener!.AcceptTcpClientAsync(ct); }
-            catch { break; }   // cancelled or listener stopped
+            try
+            {
+                client = await listener.AcceptTcpClientAsync(ct);
+                failures = 0;
+                _acceptError = null;
+            }
+            catch (Exception ex)
+            {
+                // Shutdown: the token is cancelled, or Stop() cleared and stopped the listener.
+                if (ct.IsCancellationRequested || !ReferenceEquals(_listener, listener)) break;
+                // Anything else is one failed accept, not the end of the bridge: Windows reports a client that reset
+                // its connection before it was accepted (WSAECONNRESET) on the listening socket. Leaving the loop here
+                // would keep bridge.json advertising a port nobody serves until Civil 3D is restarted.
+                failures = Math.Min(failures + 1, 1000);
+                _acceptError = $"{ex.GetType().Name}: {ex.Message} ({failures} in a row)";
+                try { await Task.Delay(Math.Min(2000, 50 * failures), ct); }
+                catch { break; }
+                continue;
+            }
             if (Interlocked.Increment(ref _connections) > MaxConnections)
             {
                 Interlocked.Decrement(ref _connections);
@@ -203,7 +228,10 @@ internal static class BridgeServer
                 while (!ct.IsCancellationRequested && (line = await lines.ReadLineAsync(ct)) != null)
                 {
                     if (line.Length == 0) continue;
-                    await writer.WriteLineAsync(await ProcessAsync(line));
+                    var outcome = new RequestOutcome();
+                    await writer.WriteLineAsync(await ProcessAsync(line, outcome));
+                    // A caller without the session token gets one answer, not a connection slot to keep.
+                    if (outcome.Close) break;
                 }
             }
             catch { /* client went away, sent too much or too slowly; nothing to report */ }
@@ -245,7 +273,13 @@ internal static class BridgeServer
         }
     }
 
-    private static async Task<string> ProcessAsync(string line)
+    /// <summary>What HandleClient must do after sending the reply.</summary>
+    private sealed class RequestOutcome
+    {
+        public bool Close;
+    }
+
+    private static async Task<string> ProcessAsync(string line, RequestOutcome outcome)
     {
         string? reqId = null;
         string method;
@@ -254,14 +288,17 @@ internal static class BridgeServer
         {
             using var doc = JsonDocument.Parse(line);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return Error(reqId, "invalid JSON request");
+            if (root.ValueKind != JsonValueKind.Object) { outcome.Close = true; return Error(reqId, "invalid JSON request"); }
             if (root.TryGetProperty("id", out var idEl)) reqId = idEl.ToString();
 
             string supplied = root.TryGetProperty("token", out var t) && t.ValueKind == JsonValueKind.String
                 ? t.GetString() ?? "" : "";
             if (!CryptographicOperations.FixedTimeEquals(
                     Encoding.UTF8.GetBytes(supplied), Encoding.UTF8.GetBytes(_token)))
+            {
+                outcome.Close = true;
                 return Error(reqId, "unauthorized");
+            }
 
             method = root.TryGetProperty("method", out var m) && m.ValueKind == JsonValueKind.String
                 ? m.GetString() ?? "" : "";
@@ -270,6 +307,7 @@ internal static class BridgeServer
         }
         catch (JsonException)
         {
+            outcome.Close = true;
             return Error(reqId, "invalid JSON request");
         }
 
